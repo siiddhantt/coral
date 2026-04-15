@@ -20,7 +20,6 @@ use crate::query::service::QueryService;
 use crate::sources::manager::SourceManager;
 use crate::sources::service::SourceService;
 use crate::state::{AppStateLayout, ConfigStore, SecretStore};
-use crate::workspaces::WorkspaceManager;
 
 /// Server-side bootstrap configuration for the Coral server.
 #[derive(Debug, Clone, Default)]
@@ -163,13 +162,8 @@ async fn start_server(
     source_manager: SourceManager,
     query_manager: QueryManager,
 ) -> Result<RunningServer, AppError> {
-    let workspace_manager = WorkspaceManager::new();
-    let source_service = SourceService::new(
-        source_manager,
-        query_manager.clone(),
-        workspace_manager.clone(),
-    );
-    let query_service = QueryService::new(query_manager, workspace_manager);
+    let source_service = SourceService::new(source_manager, query_manager.clone());
+    let query_service = QueryService::new(query_manager);
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let endpoint_uri = format!("http://{}", listener.local_addr()?);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -210,10 +204,11 @@ mod tests {
     use crate::query::manager::QueryManager;
     use crate::sources::manager::SourceManager;
     use crate::state::{AppStateLayout, ConfigStore, SecretStore};
-    use crate::workspaces::WorkspaceManager;
+    use crate::transport::workspace_to_proto;
+    use crate::workspaces::WorkspaceName;
 
     fn default_workspace() -> Workspace {
-        WorkspaceManager::new().default_workspace()
+        workspace_to_proto(&WorkspaceName::default())
     }
 
     #[tokio::test]

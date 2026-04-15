@@ -1,28 +1,28 @@
 //! Owns the source lifecycle workflow for the local app.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 
 use coral_api::v1::{
-    AvailableSource, CreateBundledSourceRequest, ImportSourceRequest, SourceInputKind,
-    SourceSecret, SourceVariable, Workspace,
+    CreateBundledSourceRequest, ImportSourceRequest, SourceSecret, SourceVariable,
 };
 
 use crate::bootstrap::AppError;
+use crate::sources::SourceName;
 use crate::sources::catalog::{
     describe_manifest, list_bundled_sources, load_bundled_source, resolve_installed_manifest,
 };
-use crate::sources::model::{ManagedSource, ManagedSourceOrigin};
+use crate::sources::model::{
+    CandidateSource, CandidateSourceInputKind, InstalledSource, SourceOrigin,
+};
 use crate::state::{AppStateLayout, ConfigStore, SecretStore};
 use crate::storage::fs;
-use crate::workspaces::WorkspaceManager;
+use crate::workspaces::WorkspaceName;
 
 #[derive(Clone)]
 pub(crate) struct SourceManager {
     config_store: ConfigStore,
     secret_store: SecretStore,
     layout: AppStateLayout,
-    workspace_manager: WorkspaceManager,
 }
 
 struct ValidatedBindings {
@@ -31,14 +31,14 @@ struct ValidatedBindings {
 }
 
 struct PersistSourceRequest<'a> {
-    available: &'a AvailableSource,
+    candidate: &'a CandidateSource,
     manifest_yaml: Option<&'a str>,
     bindings: ValidatedBindings,
-    origin: ManagedSourceOrigin,
+    origin: SourceOrigin,
 }
 
-struct ExistingSourceState {
-    source: ManagedSource,
+struct SourceRollbackState {
+    source: InstalledSource,
     manifest_yaml: Option<String>,
     secrets: BTreeMap<String, String>,
 }
@@ -53,226 +53,211 @@ impl SourceManager {
             config_store,
             secret_store,
             layout,
-            workspace_manager: WorkspaceManager::new(),
         }
     }
 
     pub(crate) fn list_workspace_sources(
         &self,
-        workspace: &Workspace,
-    ) -> Result<Vec<ManagedSource>, AppError> {
+        workspace_name: &WorkspaceName,
+    ) -> Result<Vec<InstalledSource>, AppError> {
         Ok(self
             .config_store
-            .list_workspace_sources(workspace)?
+            .list_workspace_sources(workspace_name)?
             .into_iter()
-            .map(|source| self.populate_source_version_or_keep(source))
+            .map(|source| self.populate_source_version_or_keep(workspace_name, source))
             .collect())
     }
 
     pub(crate) fn get_source(
         &self,
-        workspace: &Workspace,
-        source_name: &str,
-    ) -> Result<ManagedSource, AppError> {
-        Ok(self
-            .populate_source_version_or_keep(self.config_store.get_source(workspace, source_name)?))
+        workspace_name: &WorkspaceName,
+        source_name: &SourceName,
+    ) -> Result<InstalledSource, AppError> {
+        Ok(self.populate_source_version_or_keep(
+            workspace_name,
+            self.config_store.get_source(workspace_name, source_name)?,
+        ))
     }
 
     pub(crate) fn discover_sources(
         &self,
-        workspace: &Workspace,
-    ) -> Result<Vec<AvailableSource>, AppError> {
+        workspace_name: &WorkspaceName,
+    ) -> Result<Vec<CandidateSource>, AppError> {
         let installed = self
             .config_store
-            .list_workspace_sources(workspace)?
+            .list_workspace_sources(workspace_name)?
             .into_iter()
             .map(|source| source.name)
             .collect::<BTreeSet<_>>();
-        list_bundled_sources(workspace, &installed)
+        list_bundled_sources(&installed)
     }
 
     pub(crate) fn create_bundled_source(
         &self,
+        workspace_name: &WorkspaceName,
+        bundled_name: &SourceName,
         request: &CreateBundledSourceRequest,
-    ) -> Result<ManagedSource, AppError> {
-        let workspace = self
-            .workspace_manager
-            .require_app(request.workspace.as_ref())?;
-        let bundled_name = self
-            .workspace_manager
-            .validate_path_name("source name", &request.name)?;
-        let bundled = load_bundled_source(&bundled_name)?;
-        let available = self.describe_bundled_source(&workspace, &bundled.manifest_yaml)?;
-        let bindings = validate_bindings(
-            &self.workspace_manager,
-            &available,
-            &request.variables,
-            &request.secrets,
-        )?;
+    ) -> Result<InstalledSource, AppError> {
+        let bundled = load_bundled_source(bundled_name)?;
+        let candidate = self.describe_bundled_source(workspace_name, &bundled.manifest_yaml)?;
+        let bindings = validate_bindings(&candidate, &request.variables, &request.secrets)?;
         self.persist_source(
-            &workspace,
+            workspace_name,
             PersistSourceRequest {
-                available: &available,
+                candidate: &candidate,
                 manifest_yaml: None,
                 bindings,
-                origin: ManagedSourceOrigin::Bundled,
+                origin: SourceOrigin::Bundled,
             },
         )
     }
 
     pub(crate) fn import_source(
         &self,
+        workspace_name: &WorkspaceName,
         request: &ImportSourceRequest,
-    ) -> Result<ManagedSource, AppError> {
-        let workspace = self
-            .workspace_manager
-            .require_app(request.workspace.as_ref())?;
-        let mut available = describe_manifest(
-            &request.manifest_yaml,
-            coral_api::v1::SourceOrigin::Imported,
-            false,
-        )?;
-        available.installed = self.source_exists(&workspace, &available.name)?;
-        let bindings = validate_bindings(
-            &self.workspace_manager,
-            &available,
-            &request.variables,
-            &request.secrets,
-        )?;
+    ) -> Result<InstalledSource, AppError> {
+        let mut candidate =
+            describe_manifest(&request.manifest_yaml, SourceOrigin::Imported, false)?;
+        candidate.installed = self.source_exists(workspace_name, &candidate.name)?;
+        let bindings = validate_bindings(&candidate, &request.variables, &request.secrets)?;
         self.persist_source(
-            &workspace,
+            workspace_name,
             PersistSourceRequest {
-                available: &available,
+                candidate: &candidate,
                 manifest_yaml: Some(&request.manifest_yaml),
                 bindings,
-                origin: ManagedSourceOrigin::Imported,
+                origin: SourceOrigin::Imported,
             },
         )
     }
 
     pub(crate) fn delete_source(
         &self,
-        workspace: &Workspace,
-        source_name: &str,
-    ) -> Result<ManagedSource, AppError> {
-        let stored = self.config_store.get_source(workspace, source_name)?;
-        let source_dir = self.layout.source_dir(&stored.workspace, &stored.name);
-        let previous = ExistingSourceState {
-            source: stored.clone(),
-            manifest_yaml: match stored.origin {
-                ManagedSourceOrigin::Bundled => None,
-                ManagedSourceOrigin::Imported => Some(std::fs::read_to_string(
-                    self.layout.manifest_file(&stored.workspace, &stored.name),
+        workspace_name: &WorkspaceName,
+        source_name: &SourceName,
+    ) -> Result<InstalledSource, AppError> {
+        let stored = self.config_store.get_source(workspace_name, source_name)?;
+        let removed = self.populate_source_version_or_keep(workspace_name, stored.clone());
+        let source_dir = self.layout.source_dir(workspace_name, source_name);
+        let previous = SourceRollbackState {
+            source: stored,
+            manifest_yaml: match removed.origin {
+                SourceOrigin::Bundled => None,
+                SourceOrigin::Imported => Some(std::fs::read_to_string(
+                    self.layout.manifest_file(workspace_name, source_name),
                 )?),
             },
             secrets: self
                 .secret_store
-                .read_source_secrets_for(&stored.workspace, &stored.name)?,
+                .read_source_secrets_for(workspace_name, source_name)?,
         };
         if source_dir.exists()
             && let Err(error) = std::fs::remove_dir_all(&source_dir)
         {
-            self.restore_existing_state(workspace, source_name, Some(previous));
+            self.restore_source_rollback_state(workspace_name, source_name, Some(previous));
             return Err(error.into());
         }
-        if let Err(error) = self.config_store.remove_source(workspace, source_name) {
-            self.restore_existing_state(workspace, source_name, Some(previous));
+        if let Err(error) = self.config_store.remove_source(workspace_name, source_name) {
+            self.restore_source_rollback_state(workspace_name, source_name, Some(previous));
             return Err(error);
         }
         cleanup_empty_parent(&self.layout.workspaces_root(), source_dir.parent());
         cleanup_empty_parent(
             &self.layout.workspaces_root(),
-            self.layout.workspace_dir(&stored.workspace).parent(),
+            self.layout.workspace_dir(workspace_name).parent(),
         );
-        Ok(stored)
+        Ok(removed)
     }
 
     fn describe_bundled_source(
         &self,
-        workspace: &Workspace,
+        workspace_name: &WorkspaceName,
         manifest_yaml: &str,
-    ) -> Result<AvailableSource, AppError> {
-        let mut available =
-            describe_manifest(manifest_yaml, coral_api::v1::SourceOrigin::Bundled, false)?;
-        available.installed = self.source_exists(workspace, &available.name)?;
-        Ok(available)
+    ) -> Result<CandidateSource, AppError> {
+        let mut candidate = describe_manifest(manifest_yaml, SourceOrigin::Bundled, false)?;
+        candidate.installed = self.source_exists(workspace_name, &candidate.name)?;
+        Ok(candidate)
     }
 
     fn persist_source(
         &self,
-        workspace: &Workspace,
+        workspace_name: &WorkspaceName,
         request: PersistSourceRequest<'_>,
-    ) -> Result<ManagedSource, AppError> {
-        let source_name = self
-            .workspace_manager
-            .validate_path_name("source name", &request.available.name)?;
-        let previous = self.load_existing_state(workspace, &source_name)?;
+    ) -> Result<InstalledSource, AppError> {
+        let source_name = request.candidate.name.clone();
+        let previous = self.load_source_rollback_state(workspace_name, &source_name)?;
         if let Err(error) =
-            self.persist_manifest_artifact(workspace, &source_name, request.manifest_yaml)
+            self.persist_manifest_artifact(workspace_name, &source_name, request.manifest_yaml)
         {
-            self.restore_existing_state(workspace, &source_name, previous);
+            self.restore_source_rollback_state(workspace_name, &source_name, previous);
             return Err(error);
         }
 
         let persisted_secrets = match self.secret_store.replace_source_secrets_for(
-            workspace,
+            workspace_name,
             &source_name,
             &request.bindings.secrets,
         ) {
             Ok(secrets) => secrets,
             Err(error) => {
-                self.restore_existing_state(workspace, &source_name, previous);
+                self.restore_source_rollback_state(workspace_name, &source_name, previous);
                 return Err(error);
             }
         };
 
         let persisted_version = match request.origin {
-            ManagedSourceOrigin::Bundled => String::new(),
-            ManagedSourceOrigin::Imported => request.available.version.clone(),
+            SourceOrigin::Bundled => String::new(),
+            SourceOrigin::Imported => request.candidate.version.clone(),
         };
-        let stored = ManagedSource {
-            workspace: workspace.clone(),
+        let stored = InstalledSource {
             name: source_name.clone(),
             version: persisted_version,
             variables: request.bindings.variables,
             secrets: persisted_secrets,
             origin: request.origin,
         };
-        if let Err(error) = self.config_store.upsert_source(stored.clone()) {
-            self.restore_existing_state(workspace, &source_name, previous);
+        if let Err(error) = self
+            .config_store
+            .upsert_source(workspace_name, stored.clone())
+        {
+            self.restore_source_rollback_state(workspace_name, &source_name, previous);
             return Err(error);
         }
         let mut resolved = stored;
-        resolved.version.clone_from(&request.available.version);
+        resolved.version.clone_from(&request.candidate.version);
         Ok(resolved)
     }
 
-    fn source_exists(&self, workspace: &Workspace, source_name: &str) -> Result<bool, AppError> {
-        match self.config_store.get_source(workspace, source_name) {
-            Ok(_) => Ok(true),
-            Err(AppError::SourceNotFound(_)) => Ok(false),
-            Err(error) => Err(error),
-        }
+    fn source_exists(
+        &self,
+        workspace_name: &WorkspaceName,
+        source_name: &SourceName,
+    ) -> Result<bool, AppError> {
+        Ok(self
+            .config_store
+            .load_catalog()?
+            .contains(workspace_name, source_name))
     }
 
-    fn load_existing_state(
+    fn load_source_rollback_state(
         &self,
-        workspace: &Workspace,
-        source_name: &str,
-    ) -> Result<Option<ExistingSourceState>, AppError> {
-        let source = match self.config_store.get_source(workspace, source_name) {
+        workspace_name: &WorkspaceName,
+        source_name: &SourceName,
+    ) -> Result<Option<SourceRollbackState>, AppError> {
+        let source = match self.config_store.get_source(workspace_name, source_name) {
             Ok(source) => source,
             Err(AppError::SourceNotFound(_)) => return Ok(None),
             Err(error) => return Err(error),
         };
         let secrets = self
             .secret_store
-            .read_source_secrets_for(workspace, source_name)?;
-        Ok(Some(ExistingSourceState {
+            .read_source_secrets_for(workspace_name, source_name)?;
+        Ok(Some(SourceRollbackState {
             manifest_yaml: match source.origin {
-                ManagedSourceOrigin::Bundled => None,
-                ManagedSourceOrigin::Imported => Some(std::fs::read_to_string(
-                    self.layout.manifest_file(workspace, source_name),
+                SourceOrigin::Bundled => None,
+                SourceOrigin::Imported => Some(std::fs::read_to_string(
+                    self.layout.manifest_file(workspace_name, source_name),
                 )?),
             },
             source,
@@ -280,14 +265,14 @@ impl SourceManager {
         }))
     }
 
-    fn restore_existing_state(
+    fn restore_source_rollback_state(
         &self,
-        workspace: &Workspace,
-        source_name: &str,
-        previous: Option<ExistingSourceState>,
+        workspace_name: &WorkspaceName,
+        source_name: &SourceName,
+        previous: Option<SourceRollbackState>,
     ) {
         if let Some(previous) = previous {
-            let manifest_path = self.layout.manifest_file(workspace, source_name);
+            let manifest_path = self.layout.manifest_file(workspace_name, source_name);
             match previous.manifest_yaml {
                 Some(manifest_yaml) => {
                     if let Some(parent) = manifest_path.parent() {
@@ -301,13 +286,15 @@ impl SourceManager {
                 None => {}
             }
             let _ = self.secret_store.replace_source_secrets_for(
-                workspace,
+                workspace_name,
                 source_name,
                 &previous.secrets,
             );
-            let _ = self.config_store.upsert_source(previous.source);
+            let _ = self
+                .config_store
+                .upsert_source(workspace_name, previous.source);
         } else {
-            let source_dir = self.layout.source_dir(workspace, source_name);
+            let source_dir = self.layout.source_dir(workspace_name, source_name);
             if source_dir.exists() {
                 let _ = std::fs::remove_dir_all(&source_dir);
             }
@@ -316,11 +303,11 @@ impl SourceManager {
 
     fn persist_manifest_artifact(
         &self,
-        workspace: &Workspace,
-        source_name: &str,
+        workspace_name: &WorkspaceName,
+        source_name: &SourceName,
         manifest_yaml: Option<&str>,
     ) -> Result<(), AppError> {
-        let manifest_path = self.layout.manifest_file(workspace, source_name);
+        let manifest_path = self.layout.manifest_file(workspace_name, source_name);
         match manifest_yaml {
             Some(manifest_yaml) => {
                 if let Some(parent) = manifest_path.parent() {
@@ -339,38 +326,42 @@ impl SourceManager {
 
     fn populate_source_version(
         &self,
-        mut source: ManagedSource,
-    ) -> Result<ManagedSource, AppError> {
-        source.version = resolve_installed_manifest(&source, &self.layout)?
-            .available
+        workspace_name: &WorkspaceName,
+        mut source: InstalledSource,
+    ) -> Result<InstalledSource, AppError> {
+        source.version = resolve_installed_manifest(workspace_name, &source, &self.layout)?
+            .candidate
             .version;
         Ok(source)
     }
 
-    fn populate_source_version_or_keep(&self, source: ManagedSource) -> ManagedSource {
-        self.populate_source_version(source.clone())
+    fn populate_source_version_or_keep(
+        &self,
+        workspace_name: &WorkspaceName,
+        source: InstalledSource,
+    ) -> InstalledSource {
+        self.populate_source_version(workspace_name, source.clone())
             .unwrap_or(source)
     }
 }
 
 fn validate_bindings(
-    workspace_manager: &WorkspaceManager,
-    available: &AvailableSource,
+    candidate: &CandidateSource,
     variables: &[SourceVariable],
     secrets: &[SourceSecret],
 ) -> Result<ValidatedBindings, AppError> {
-    let variable_values = collect_unique_variables(workspace_manager, variables)?;
-    let secret_values = collect_unique_secrets(workspace_manager, secrets)?;
-    let expected_variables = available
+    let variable_values = collect_unique_variables(variables)?;
+    let secret_values = collect_unique_secrets(secrets)?;
+    let expected_variables = candidate
         .inputs
         .iter()
-        .filter(|input| input.kind == SourceInputKind::Variable as i32)
+        .filter(|input| input.kind == CandidateSourceInputKind::Variable)
         .map(|input| input.key.clone())
         .collect::<BTreeSet<_>>();
-    let expected_secrets = available
+    let expected_secrets = candidate
         .inputs
         .iter()
-        .filter(|input| input.kind == SourceInputKind::Secret as i32)
+        .filter(|input| input.kind == CandidateSourceInputKind::Secret)
         .map(|input| input.key.clone())
         .collect::<BTreeSet<_>>();
 
@@ -389,9 +380,9 @@ fn validate_bindings(
         }
     }
 
-    for input in &available.inputs {
-        match SourceInputKind::try_from(input.kind) {
-            Ok(SourceInputKind::Variable)
+    for input in &candidate.inputs {
+        match input.kind {
+            CandidateSourceInputKind::Variable
                 if input.required && !variable_values.contains_key(&input.key) =>
             {
                 return Err(AppError::InvalidInput(format!(
@@ -399,7 +390,7 @@ fn validate_bindings(
                     input.key
                 )));
             }
-            Ok(SourceInputKind::Secret)
+            CandidateSourceInputKind::Secret
                 if input.required && !secret_values.contains_key(&input.key) =>
             {
                 return Err(AppError::InvalidInput(format!(
@@ -418,68 +409,88 @@ fn validate_bindings(
 }
 
 fn collect_unique_variables(
-    workspace_manager: &WorkspaceManager,
-    values: &[SourceVariable],
+    variables: &[SourceVariable],
 ) -> Result<BTreeMap<String, String>, AppError> {
-    let mut unique = BTreeMap::new();
-    for variable in values {
-        let key = workspace_manager.validate_name("source variable key", &variable.key)?;
-        if unique.insert(key.clone(), variable.value.clone()).is_some() {
+    let mut values = BTreeMap::new();
+    for variable in variables {
+        let key = normalize_binding_key("source variable key", &variable.key)?;
+        if values.insert(key.clone(), variable.value.clone()).is_some() {
             return Err(AppError::InvalidInput(format!(
                 "source variable '{key}' is repeated"
             )));
         }
     }
-    Ok(unique)
+    Ok(values)
 }
 
-fn collect_unique_secrets(
-    workspace_manager: &WorkspaceManager,
-    values: &[SourceSecret],
-) -> Result<BTreeMap<String, String>, AppError> {
-    let mut unique = BTreeMap::new();
-    for secret in values {
-        let key = workspace_manager.validate_name("source secret key", &secret.key)?;
-        if unique.insert(key.clone(), secret.value.clone()).is_some() {
+fn collect_unique_secrets(secrets: &[SourceSecret]) -> Result<BTreeMap<String, String>, AppError> {
+    let mut values = BTreeMap::new();
+    for secret in secrets {
+        let key = normalize_binding_key("source secret key", &secret.key)?;
+        if values.insert(key.clone(), secret.value.clone()).is_some() {
             return Err(AppError::InvalidInput(format!(
                 "source secret '{key}' is repeated"
             )));
         }
     }
-    Ok(unique)
+    Ok(values)
 }
 
-fn cleanup_empty_parent(root: &PathBuf, parent: Option<&std::path::Path>) {
-    let Some(mut current) = parent.map(PathBuf::from) else {
+fn normalize_binding_key(label: &str, value: &str) -> Result<String, AppError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidInput(format!("missing {label}")));
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        return Err(AppError::InvalidInput(format!(
+            "{label} must not contain '/' or '\\\\'"
+        )));
+    }
+    if trimmed.contains('=') || trimmed.contains('\n') || trimmed.contains('\r') {
+        return Err(AppError::InvalidInput(format!(
+            "{label} must not contain '=', '\\n', or '\\r'"
+        )));
+    }
+    if trimmed.starts_with('#') {
+        return Err(AppError::InvalidInput(format!(
+            "{label} must not start with '#'"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn cleanup_empty_parent(root: &std::path::Path, path: Option<&std::path::Path>) {
+    let Some(mut current) = path.map(std::path::Path::to_path_buf) else {
         return;
     };
-    while current.starts_with(root) && current != *root {
-        let is_empty = current
-            .read_dir()
-            .ok()
-            .is_some_and(|mut entries| entries.next().is_none());
-        if !is_empty {
-            break;
-        }
-        let _ = std::fs::remove_dir(&current);
-        let Some(next) = current.parent() else {
+    while current.starts_with(root) && current != root {
+        let Ok(mut entries) = std::fs::read_dir(&current) else {
             break;
         };
-        current = next.to_path_buf();
+        if entries.next().is_some() {
+            break;
+        }
+        let next = current.parent().unwrap_or(root).to_path_buf();
+        if std::fs::remove_dir(&current).is_err() {
+            break;
+        }
+        current = next;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use coral_api::v1::{ImportSourceRequest, SourceSecret, SourceVariable, Workspace};
+    use coral_api::v1::{ImportSourceRequest, SourceSecret, SourceVariable};
     use tempfile::TempDir;
 
-    use super::SourceManager;
+    use super::{SourceManager, normalize_binding_key};
+    use crate::sources::SourceName;
     use crate::state::{AppStateLayout, ConfigStore, SecretStore};
-    use crate::workspaces::WorkspaceManager;
+    use crate::transport::workspace_to_proto;
+    use crate::workspaces::WorkspaceName;
 
-    fn default_workspace() -> Workspace {
-        WorkspaceManager::new().default_workspace()
+    fn default_workspace() -> WorkspaceName {
+        WorkspaceName::default()
     }
 
     fn manifest_with_secret() -> String {
@@ -520,24 +531,28 @@ tables:
             layout.clone(),
         );
 
-        let source_dir = layout.source_dir(&default_workspace(), "secured_messages");
+        let source_name = SourceName::parse("secured_messages").expect("source");
+        let source_dir = layout.source_dir(&default_workspace(), &source_name);
         std::fs::create_dir_all(&source_dir).expect("create source dir");
         std::fs::create_dir(source_dir.join("secrets.env"))
             .expect("create blocking secrets directory");
 
         let error = manager
-            .import_source(&ImportSourceRequest {
-                workspace: Some(default_workspace()),
-                manifest_yaml: manifest_with_secret(),
-                variables: vec![SourceVariable {
-                    key: "API_BASE".to_string(),
-                    value: "https://example.com".to_string(),
-                }],
-                secrets: vec![SourceSecret {
-                    key: "API_TOKEN".to_string(),
-                    value: "secret-token".to_string(),
-                }],
-            })
+            .import_source(
+                &default_workspace(),
+                &ImportSourceRequest {
+                    workspace: Some(workspace_to_proto(&default_workspace())),
+                    manifest_yaml: manifest_with_secret(),
+                    variables: vec![SourceVariable {
+                        key: "API_BASE".to_string(),
+                        value: "https://example.com".to_string(),
+                    }],
+                    secrets: vec![SourceSecret {
+                        key: "API_TOKEN".to_string(),
+                        value: "secret-token".to_string(),
+                    }],
+                },
+            )
             .expect_err("secret persistence should fail");
 
         assert!(
@@ -549,7 +564,7 @@ tables:
         );
         assert!(
             !layout
-                .source_dir(&default_workspace(), "secured_messages")
+                .source_dir(&default_workspace(), &source_name)
                 .exists(),
             "source dir should be cleaned up after secret persistence failure"
         );
@@ -560,5 +575,36 @@ tables:
                 .is_empty(),
             "source config should not be persisted after rollback"
         );
+    }
+
+    #[test]
+    fn logical_binding_keys_allow_dot_segments() {
+        assert_eq!(
+            normalize_binding_key("source variable key", "..").expect("key"),
+            ".."
+        );
+    }
+
+    #[test]
+    fn rejects_env_file_breaking_binding_keys() {
+        let error = normalize_binding_key("source secret key", "API=TOKEN")
+            .expect_err("'=' should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("must not contain '=', '\\n', or '\\r'")
+        );
+
+        let error = normalize_binding_key("source secret key", "API\nTOKEN")
+            .expect_err("newlines should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("must not contain '=', '\\n', or '\\r'")
+        );
+
+        let error = normalize_binding_key("source secret key", " #comment")
+            .expect_err("leading comment markers should be rejected");
+        assert!(error.to_string().contains("must not start with '#'"));
     }
 }

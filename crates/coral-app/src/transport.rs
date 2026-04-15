@@ -5,6 +5,7 @@ use tonic::Status;
 
 use crate::bootstrap::{app_status, core_status};
 use crate::query::manager::QueryManagerError;
+use crate::workspaces::WorkspaceName;
 
 #[allow(
     clippy::needless_pass_by_value,
@@ -17,9 +18,18 @@ pub(crate) fn query_status(error: QueryManagerError) -> Status {
     }
 }
 
-pub(crate) fn table_to_proto(workspace: &Workspace, table: coral_engine::TableInfo) -> Table {
+pub(crate) fn workspace_to_proto(workspace_name: &WorkspaceName) -> Workspace {
+    Workspace {
+        name: workspace_name.as_str().to_string(),
+    }
+}
+
+pub(crate) fn table_to_proto(
+    workspace_name: &WorkspaceName,
+    table: coral_engine::TableInfo,
+) -> Table {
     Table {
-        workspace: Some(workspace.clone()),
+        workspace: Some(workspace_to_proto(workspace_name)),
         schema_name: table.schema_name,
         name: table.table_name,
         description: table.description,
@@ -40,10 +50,10 @@ pub(crate) fn table_to_proto(workspace: &Workspace, table: coral_engine::TableIn
 mod tests {
     use tonic::Code;
 
-    use super::{query_status, table_to_proto};
+    use super::{query_status, table_to_proto, workspace_to_proto};
     use crate::bootstrap::AppError;
     use crate::query::manager::QueryManagerError;
-    use coral_api::v1::Workspace;
+    use crate::workspaces::WorkspaceName;
     use coral_engine::{ColumnInfo, CoreError, TableInfo};
 
     #[test]
@@ -68,9 +78,7 @@ mod tests {
 
     #[test]
     fn table_to_proto_preserves_table_metadata() {
-        let workspace = Workspace {
-            name: "default".to_string(),
-        };
+        let workspace_name = WorkspaceName::parse("default").expect("workspace");
         let table = TableInfo {
             schema_name: "demo".to_string(),
             table_name: "users".to_string(),
@@ -83,9 +91,9 @@ mod tests {
             required_filters: vec!["org_id".to_string()],
         };
 
-        let proto = table_to_proto(&workspace, table);
+        let proto = table_to_proto(&workspace_name, table);
 
-        assert_eq!(proto.workspace, Some(workspace));
+        assert_eq!(proto.workspace, Some(workspace_to_proto(&workspace_name)));
         assert_eq!(proto.schema_name, "demo");
         assert_eq!(proto.name, "users");
         assert_eq!(proto.description, "User records");

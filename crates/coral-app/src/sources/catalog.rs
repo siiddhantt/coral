@@ -2,12 +2,15 @@
 
 use std::collections::BTreeSet;
 
-use coral_api::v1::{AvailableSource, SourceInputKind, SourceInputSpec, SourceOrigin, Workspace};
 use coral_spec::{ManifestInputKind, ManifestInputSpec, parse_manifest_and_inputs};
 
 use crate::bootstrap::AppError;
-use crate::sources::model::{ManagedSource, ManagedSourceOrigin};
+use crate::sources::SourceName;
+use crate::sources::model::{
+    CandidateSource, CandidateSourceInput, CandidateSourceInputKind, InstalledSource, SourceOrigin,
+};
 use crate::state::AppStateLayout;
+use crate::workspaces::WorkspaceName;
 
 include!(concat!(env!("OUT_DIR"), "/bundled_sources.rs"));
 
@@ -19,33 +22,33 @@ pub(crate) struct BundledSourceManifest {
 #[derive(Debug, Clone)]
 pub(crate) struct InstalledSourceManifest {
     pub(crate) manifest_yaml: String,
-    pub(crate) available: AvailableSource,
+    pub(crate) candidate: CandidateSource,
 }
 
 pub(crate) fn list_bundled_sources(
-    _workspace: &Workspace,
-    installed_source_names: &BTreeSet<String>,
-) -> Result<Vec<AvailableSource>, AppError> {
-    let mut available = BUNDLED_SOURCES
+    installed_source_names: &BTreeSet<SourceName>,
+) -> Result<Vec<CandidateSource>, AppError> {
+    let mut candidates = BUNDLED_SOURCES
         .iter()
         .map(|(name, manifest_yaml)| {
-            let mut source = describe_manifest(
+            let bundled_name = SourceName::parse(name)?;
+            let mut candidate = describe_manifest(
                 manifest_yaml,
                 SourceOrigin::Bundled,
-                installed_source_names.contains(*name),
+                installed_source_names.contains(&bundled_name),
             )?;
-            source.name = (*name).to_string();
-            Ok(source)
+            candidate.name = bundled_name;
+            Ok(candidate)
         })
         .collect::<Result<Vec<_>, AppError>>()?;
-    available.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(available)
+    candidates.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(candidates)
 }
 
-pub(crate) fn load_bundled_source(name: &str) -> Result<BundledSourceManifest, AppError> {
+pub(crate) fn load_bundled_source(name: &SourceName) -> Result<BundledSourceManifest, AppError> {
     let Some((_, manifest_yaml)) = BUNDLED_SOURCES
         .iter()
-        .find(|(candidate, _)| *candidate == name)
+        .find(|(candidate, _)| *candidate == name.as_str())
     else {
         return Err(AppError::InvalidInput(format!(
             "unknown bundled source '{name}'"
@@ -59,26 +62,27 @@ pub(crate) fn load_bundled_source(name: &str) -> Result<BundledSourceManifest, A
 /// Resolve the effective installed manifest and verify it still matches the
 /// installed source identity in app state.
 pub(crate) fn resolve_installed_manifest(
-    source: &ManagedSource,
+    workspace_name: &WorkspaceName,
+    source: &InstalledSource,
     layout: &AppStateLayout,
 ) -> Result<InstalledSourceManifest, AppError> {
     let manifest_yaml = match source.origin {
-        ManagedSourceOrigin::Bundled => load_bundled_source(&source.name)?.manifest_yaml,
-        ManagedSourceOrigin::Imported => {
-            std::fs::read_to_string(layout.manifest_file(&source.workspace, &source.name))?
+        SourceOrigin::Bundled => load_bundled_source(&source.name)?.manifest_yaml,
+        SourceOrigin::Imported => {
+            std::fs::read_to_string(layout.manifest_file(workspace_name, &source.name))?
         }
     };
-    let mut available = describe_manifest(&manifest_yaml, source.origin.to_proto(), false)?;
-    if available.name != source.name {
+    let mut candidate = describe_manifest(&manifest_yaml, source.origin, false)?;
+    if candidate.name != source.name {
         return Err(AppError::FailedPrecondition(format!(
             "installed source '{}' does not match manifest name '{}'",
-            source.name, available.name
+            source.name, candidate.name
         )));
     }
-    available.installed = true;
+    candidate.installed = true;
     Ok(InstalledSourceManifest {
         manifest_yaml,
-        available,
+        candidate,
     })
 }
 
@@ -86,32 +90,32 @@ pub(crate) fn describe_manifest(
     manifest_yaml: &str,
     origin: SourceOrigin,
     installed: bool,
-) -> Result<AvailableSource, AppError> {
+) -> Result<CandidateSource, AppError> {
     let (manifest, inputs) = parse_manifest_and_inputs(manifest_yaml)
         .map_err(|error| AppError::InvalidInput(error.to_string()))?;
-    Ok(AvailableSource {
-        name: manifest.schema_name().to_string(),
+    Ok(CandidateSource {
+        name: SourceName::parse(manifest.schema_name())?,
         description: manifest.description().to_string(),
         version: manifest.source_version().to_string(),
-        inputs: inputs.into_iter().map(proto_input_spec).collect(),
+        inputs: inputs.into_iter().map(candidate_input_spec).collect(),
         installed,
-        origin: origin as i32,
+        origin,
     })
 }
 
-fn proto_input_spec(input: ManifestInputSpec) -> SourceInputSpec {
-    SourceInputSpec {
+fn candidate_input_spec(input: ManifestInputSpec) -> CandidateSourceInput {
+    CandidateSourceInput {
         key: input.key,
-        kind: proto_input_kind(input.kind) as i32,
+        kind: candidate_input_kind(input.kind),
         required: input.required,
         default_value: input.default_value,
     }
 }
 
-fn proto_input_kind(kind: ManifestInputKind) -> SourceInputKind {
+fn candidate_input_kind(kind: ManifestInputKind) -> CandidateSourceInputKind {
     match kind {
-        ManifestInputKind::Variable => SourceInputKind::Variable,
-        ManifestInputKind::Secret => SourceInputKind::Secret,
+        ManifestInputKind::Variable => CandidateSourceInputKind::Variable,
+        ManifestInputKind::Secret => CandidateSourceInputKind::Secret,
     }
 }
 
@@ -119,22 +123,24 @@ fn proto_input_kind(kind: ManifestInputKind) -> SourceInputKind {
 mod tests {
     use std::collections::BTreeSet;
 
-    use coral_api::v1::{SourceInputKind, Workspace};
-
     use super::{describe_manifest, list_bundled_sources};
-    use crate::workspaces::WorkspaceManager;
-
-    fn default_workspace() -> Workspace {
-        WorkspaceManager::new().default_workspace()
-    }
+    use crate::sources::SourceName;
+    use crate::sources::model::{CandidateSourceInputKind, SourceOrigin};
 
     #[test]
     fn bundled_sources_load_through_catalog() {
-        let sources =
-            list_bundled_sources(&default_workspace(), &BTreeSet::new()).expect("bundled sources");
+        let sources = list_bundled_sources(&BTreeSet::new()).expect("bundled sources");
         assert!(!sources.is_empty());
-        assert!(sources.iter().any(|source| source.name == "github"));
-        assert!(sources.iter().any(|source| source.name == "stripe"));
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.name == SourceName::parse("github").expect("source"))
+        );
+        assert!(
+            sources
+                .iter()
+                .any(|source| source.name == SourceName::parse("stripe").expect("source"))
+        );
         assert!(sources.iter().all(|source| !source.version.is_empty()));
     }
 
@@ -163,15 +169,15 @@ tables:
       - name: id
         type: Utf8
 "#,
-            coral_api::v1::SourceOrigin::Imported,
+            SourceOrigin::Imported,
             false,
         )
         .expect("describe manifest");
         assert_eq!(source.inputs.len(), 2);
         assert_eq!(source.inputs[0].key, "API_BASE");
-        assert_eq!(source.inputs[0].kind, SourceInputKind::Variable as i32);
+        assert_eq!(source.inputs[0].kind, CandidateSourceInputKind::Variable);
         assert_eq!(source.inputs[1].key, "API_TOKEN");
-        assert_eq!(source.inputs[1].kind, SourceInputKind::Secret as i32);
+        assert_eq!(source.inputs[1].kind, CandidateSourceInputKind::Secret);
     }
 
     #[test]
@@ -194,7 +200,7 @@ tables:
       - name: id
         type: Utf8
 "#,
-            coral_api::v1::SourceOrigin::Imported,
+            SourceOrigin::Imported,
             false,
         )
         .expect_err("legacy env input should fail");
@@ -222,7 +228,7 @@ tables:
       - name: id
         type: Utf8
 ",
-            coral_api::v1::SourceOrigin::Imported,
+            SourceOrigin::Imported,
             false,
         )
         .expect_err("legacy schema field should fail");

@@ -7,21 +7,20 @@ use coral_api::v1::query_service_server::QueryService as QueryServiceApi;
 use coral_api::v1::{ExecuteSqlRequest, ExecuteSqlResponse, ListTablesRequest, ListTablesResponse};
 use tonic::{Request, Response, Status};
 
-use crate::bootstrap::core_status;
+use crate::bootstrap::{app_status, core_status};
 use crate::query::manager::QueryManager;
 use crate::transport::{query_status, table_to_proto};
-use crate::workspaces::WorkspaceManager;
+use crate::workspaces::WorkspaceName;
 
 #[derive(Clone)]
 pub(crate) struct QueryService {
     queries: QueryManager,
-    workspaces: WorkspaceManager,
 }
+
 impl QueryService {
-    pub(crate) fn new(query_manager: QueryManager, workspace_manager: WorkspaceManager) -> Self {
+    pub(crate) fn new(query_manager: QueryManager) -> Self {
         Self {
             queries: query_manager,
-            workspaces: workspace_manager,
         }
     }
 }
@@ -33,14 +32,19 @@ impl QueryServiceApi for QueryService {
         request: Request<ListTablesRequest>,
     ) -> Result<Response<ListTablesResponse>, Status> {
         let request = request.into_inner();
-        let workspace = self.workspaces.require(request.workspace.as_ref())?;
+        let workspace = request.workspace.as_ref().ok_or_else(|| {
+            app_status(crate::bootstrap::AppError::InvalidInput(
+                "missing workspace".to_string(),
+            ))
+        })?;
+        let workspace_name = WorkspaceName::parse(&workspace.name).map_err(app_status)?;
         let tables = self
             .queries
-            .list_tables(&workspace)
+            .list_tables(&workspace_name)
             .await
             .map_err(query_status)?
             .into_iter()
-            .map(|table| table_to_proto(&workspace, table))
+            .map(|table| table_to_proto(&workspace_name, table))
             .collect();
         Ok(Response::new(ListTablesResponse { tables }))
     }
@@ -50,10 +54,15 @@ impl QueryServiceApi for QueryService {
         request: Request<ExecuteSqlRequest>,
     ) -> Result<Response<ExecuteSqlResponse>, Status> {
         let request = request.into_inner();
-        let workspace = self.workspaces.require(request.workspace.as_ref())?;
+        let workspace = request.workspace.as_ref().ok_or_else(|| {
+            app_status(crate::bootstrap::AppError::InvalidInput(
+                "missing workspace".to_string(),
+            ))
+        })?;
+        let workspace_name = WorkspaceName::parse(&workspace.name).map_err(app_status)?;
         let execution = self
             .queries
-            .execute_sql(&workspace, &request.sql)
+            .execute_sql(&workspace_name, &request.sql)
             .await
             .map_err(query_status)?;
         let response = ExecuteSqlResponse {

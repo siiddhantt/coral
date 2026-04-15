@@ -1,4 +1,4 @@
-pub(crate) mod manager;
+pub(crate) mod name;
 
-pub use manager::DEFAULT_WORKSPACE_ID;
-pub(crate) use manager::WorkspaceManager;
+pub use name::DEFAULT_WORKSPACE_ID;
+pub(crate) use name::WorkspaceName;
