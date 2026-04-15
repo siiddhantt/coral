@@ -1,6 +1,6 @@
 # GitHub Connector
 
-**Version:** 1.1.4
+**Version:** 1.1.5
 **Source:** OpenAPI-generated from GitHub's v3 REST API spec
 **Backend:** HTTP
 **Tables:** 369
@@ -29,6 +29,9 @@ To rotate or update your token, run the same command again.
 GitHub allows 5,000 core API requests/hour per authenticated user.
 Each Coral query maps to one or more API calls.
 Search endpoints have a separate 30 requests/minute limit.
+The connector treats a `403` response as rate-limited when GitHub's
+`X-RateLimit-Remaining` header is `0` or a `Retry-After` header is present,
+which avoids retrying ordinary permission failures.
 
 ## Table categories
 

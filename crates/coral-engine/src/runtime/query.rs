@@ -145,6 +145,7 @@ fn provider_error_to_core(error: &ProviderQueryError) -> CoreError {
             )),
             _ => CoreError::FailedPrecondition(detail.clone()),
         },
+        ProviderQueryError::RateLimited { .. } => CoreError::Unavailable(error.to_string()),
     }
 }
 
