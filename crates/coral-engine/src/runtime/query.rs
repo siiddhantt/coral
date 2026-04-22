@@ -2,15 +2,18 @@
 
 use std::sync::Arc;
 
-use datafusion::error::DataFusionError;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
 
 use crate::backends::compile_query_source;
-use crate::backends::http::ProviderQueryError;
 use crate::runtime::catalog;
-use crate::runtime::registry::{SourceRegistrationFailure, register_sources};
-use crate::{CoreError, QueryExecution, QueryRuntimeProvider, QuerySource, TableInfo};
+use crate::runtime::error::datafusion_to_core;
+use crate::runtime::registry::{
+    CompiledQuerySource, SourceRegistrationCandidate, SourceRegistrationFailure, register_sources,
+};
+use crate::{
+    CoreError, EngineExtensions, QueryExecution, QueryRuntimeProvider, QuerySource, TableInfo,
+};
 
 pub(crate) struct QueryRuntimeAdapter {
     ctx: Arc<SessionContext>,
@@ -35,25 +38,34 @@ pub(crate) async fn build_runtime(
     ));
 
     let runtime_context = runtime.runtime_context();
-    let mut compiled_sources = Vec::new();
-    let mut failures = Vec::new();
+    let mut build_options: EngineExtensions = runtime.engine_extensions();
+    let mut source_candidates = Vec::new();
     for source in sources {
         match compile_query_source(source, &runtime_context) {
-            Ok(compiled) => compiled_sources.push(compiled),
-            Err(error) => failures.push(SourceRegistrationFailure {
-                schema_name: source.source_name().to_string(),
-                detail: error.to_string(),
+            Ok(compiled) => {
+                source_candidates.push(SourceRegistrationCandidate::Compiled(
+                    CompiledQuerySource {
+                        source: source.clone(),
+                        compiled,
+                    },
+                ));
+            }
+            Err(error) => source_candidates.push(SourceRegistrationCandidate::CompileFailed {
+                source: source.clone(),
+                error,
             }),
         }
     }
-    let registration = register_sources(&ctx, compiled_sources)
-        .await
-        .map_err(|err| datafusion_to_core(&err))?;
+    let registration = register_sources(
+        &ctx,
+        source_candidates,
+        build_options.source_decorators.as_mut_slice(),
+    )
+    .await?;
     catalog::register(&ctx, &registration.active_sources)
         .map_err(|err| datafusion_to_core(&err))?;
     let tables = catalog::collect_tables(&registration.active_sources);
-    failures.extend(registration.failures);
-    for failure in &failures {
+    for failure in &registration.failures {
         tracing::warn!(
             source = %failure.schema_name,
             detail = %failure.detail,
@@ -64,7 +76,7 @@ pub(crate) async fn build_runtime(
     Ok(QueryRuntimeAdapter {
         ctx,
         tables,
-        failures,
+        failures: registration.failures,
     })
 }
 
@@ -105,36 +117,6 @@ fn read_only_sql_options() -> SQLOptions {
         .with_allow_statements(false)
 }
 
-fn datafusion_to_core(error: &DataFusionError) -> CoreError {
-    // Unwrap Context/Shared/Diagnostic wrappers so wrapped schema errors
-    // get classified by their root variant instead of all landing in the
-    // `Internal` bucket. Without `find_root()`, `SELECT bogus FROM wide`
-    // surfaces as `CoreError::Internal` because DataFusion wraps the
-    // SchemaError in `Context`/`Execution`, hiding the structured variant
-    // from the match arms below.
-    match error.find_root() {
-        DataFusionError::SQL(detail, _) => CoreError::InvalidInput(detail.to_string()),
-        DataFusionError::Plan(detail) => CoreError::InvalidInput(detail.clone()),
-        DataFusionError::SchemaError(schema_error, _) => {
-            CoreError::InvalidInput(schema_error.to_string())
-        }
-        DataFusionError::NotImplemented(detail) => CoreError::Unimplemented(detail.clone()),
-        DataFusionError::External(inner) => {
-            if let Some(provider_error) = inner.downcast_ref::<ProviderQueryError>() {
-                return provider_error_to_core(provider_error);
-            }
-            CoreError::internal(inner.to_string())
-        }
-        DataFusionError::ObjectStore(err) => CoreError::Unavailable(err.to_string()),
-        DataFusionError::ResourcesExhausted(detail) => CoreError::Unavailable(detail.clone()),
-        other => CoreError::internal(other.to_string()),
-    }
-}
-
-fn provider_error_to_core(error: &ProviderQueryError) -> CoreError {
-    CoreError::QueryFailure(Box::new(error.to_structured()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,6 +124,7 @@ mod tests {
     #[test]
     fn datafusion_to_core_unwraps_context_wrapped_schema_error_to_invalid_input() {
         use datafusion::common::{Column, SchemaError};
+        use datafusion::error::DataFusionError;
 
         let schema_err = Box::new(SchemaError::FieldNotFound {
             field: Box::new(Column::new_unqualified("user_login")),
