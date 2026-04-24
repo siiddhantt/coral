@@ -220,6 +220,7 @@ inputs:
     kind: secret
 base_url: "{{input.API_BASE}}"
 auth:
+  type: HeaderAuth
   headers:
     - name: Authorization
       from: template
@@ -244,6 +245,117 @@ In this minimal example:
 - with the default response rules, Coral treats the selected response value directly as rows unless you configure a different `row_strategy`
 - `inputs` declares the install-time variables and secrets for this source in stable authored order. At install time, `coral source add` reads each key from an environment variable of the same name (or prompts for them when run with `--interactive`). At runtime, installed inputs are surfaced through `coral.inputs`.
 - `{{input.API_TOKEN}}` is resolved from the store implied by the declared input kind
+
+### HTTP authentication
+
+The top-level `auth` block declares how Coral authenticates outgoing requests. Pick one of three `type` values:
+
+| `type` | Purpose |
+| ------ | ------- |
+| `HeaderAuth` | Attach one or more declarative auth headers (Bearer tokens, API keys, pre-signed headers). |
+| `BasicAuth` | HTTP Basic. Coral base64-encodes `username:password` into `Authorization: Basic ...`. |
+| `CustomAuth` | Use a named authenticator for auth schemes that need request signing, such as AWS SigV4. |
+
+Credentials for authentication are declared in [Source inputs](/reference/source-spec-reference#source-inputs).
+
+#### `HeaderAuth`
+
+```yaml
+auth:
+  type: HeaderAuth
+  headers:
+    - name: Authorization
+      from: template
+      template: Bearer {{input.API_TOKEN}}
+```
+
+`headers` entries share the same shape as request/table headers, but only `from: literal`, `from: template`, and `from: input` are meaningful here — filter and state tokens have no value at auth time.
+
+#### `BasicAuth`
+
+```yaml
+auth:
+  type: BasicAuth
+  username: "{{input.API_USER}}"
+  password: "{{input.API_TOKEN}}"
+```
+
+`username` and `password` are templates; `{{input.KEY}}` tokens are honored. Coral encodes them as `Authorization: Basic base64(user:pass)`.
+
+#### `CustomAuth`
+
+```yaml
+auth:
+  type: CustomAuth
+  authenticator: aws_sigv4
+  # ...authenticator-specific fields, see below
+```
+
+The `authenticator` key names a runtime-provided authenticator. All other fields under `auth` are passed through as that authenticator's config. Use this type when signing depends on the final request contents.
+
+##### `aws_sigv4`
+
+Signs outgoing requests with AWS Signature Version 4. Useful for querying AWS monitoring services via CloudWatch, CloudTrail, or any other SigV4-protected API.
+
+Example against CloudWatch Logs:
+
+```yaml
+auth:
+  type: CustomAuth
+  authenticator: aws_sigv4
+  service: logs
+  region: "{{input.AWS_REGION}}"
+  access_key_id: "{{input.AWS_ACCESS_KEY_ID}}"
+  secret_access_key: "{{input.AWS_SECRET_ACCESS_KEY}}"
+```
+
+| Field | Required | Notes |
+| ----- | -------- | ----- |
+| `service` | yes | AWS service code (`logs`, `monitoring`, `cloudtrail`, `execute-api`, …) |
+| `region` | yes | AWS region; templated from inputs |
+| `access_key_id` | yes | AWS access key ID |
+| `secret_access_key` | yes | AWS secret access key |
+| `session_token` | no | Omit for long-term credentials; include for STS/assumed-role sessions |
+
+For STS or assumed-role temporary credentials, also declare `AWS_SESSION_TOKEN` in the source's `inputs` block and include it in the authenticator config:
+
+```yaml
+inputs:
+  # ...existing AWS_REGION, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY inputs
+  AWS_SESSION_TOKEN:
+    kind: secret
+    hint: AWS session token for temporary credentials.
+
+auth:
+  # ...existing aws_sigv4 config
+  type: CustomAuth
+  authenticator: aws_sigv4
+  service: logs
+  region: "{{input.AWS_REGION}}"
+  access_key_id: "{{input.AWS_ACCESS_KEY_ID}}"
+  secret_access_key: "{{input.AWS_SECRET_ACCESS_KEY}}"
+  session_token: "{{input.AWS_SESSION_TOKEN}}"
+```
+
+**S3 note:** `service: s3` and `service: s3-outposts` switch to S3-specific signing (single percent-encoding, path normalization disabled, `X-Amz-Content-Sha256` enabled). This is required to avoid `SignatureDoesNotMatch` on bucket operations and is handled automatically.
+
+#### Non-auth request headers
+
+Headers required on every request but not used for auth (Accept, API version, etc.) go in a top-level `request_headers:` block (sibling of `auth:`), not inside `auth.headers`:
+
+```yaml
+request_headers:
+  - name: Accept
+    from: literal
+    value: application/json
+  - name: X-Api-Version
+    from: literal
+    value: "2024-10-01"
+```
+
+`request_headers` resolves before auth on each request. If an auth header has the same name, it overwrites the value from `request_headers`.
+
+Coral sets `User-Agent: coral` on every outgoing request automatically — do not declare it in manifests.
 
 ### HTTP rate limiting
 
@@ -385,6 +497,7 @@ inputs:
 
 base_url: "{{input.API_BASE}}"
 auth:
+  type: HeaderAuth
   headers:
     - name: Authorization
       from: template

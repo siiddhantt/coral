@@ -81,13 +81,6 @@ pub enum ManifestDataType {
     Json,
 }
 
-/// Source-level authentication requirements for HTTP-backed source specs.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct AuthSpec {
-    #[serde(default)]
-    pub headers: Vec<HeaderSpec>,
-}
-
 /// One request or auth header declared in the source spec.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HeaderSpec {

@@ -16,13 +16,15 @@ inputs:
       See [StatusGator API docs](https://statusgator.com/api/v3/docs).
 base_url: "https://statusgator.com/api/v3"
 auth:
+  type: HeaderAuth
   headers:
     - name: Authorization
       from: template
       template: "Bearer {{input.STATUSGATOR_API_TOKEN}}"
-    - name: Accept
-      from: literal
-      value: application/json
+request_headers:
+  - name: Accept
+    from: literal
+    value: application/json
 test_queries:
   - SELECT * FROM statusgator.boards LIMIT 1
 tables:
