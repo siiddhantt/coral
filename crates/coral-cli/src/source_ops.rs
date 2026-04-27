@@ -3,9 +3,9 @@ use std::io::{IsTerminal, stdin, stdout};
 use std::path::Path;
 
 use coral_api::v1::{
-    AvailableSource, CreateBundledSourceRequest, DeleteSourceRequest, DiscoverSourcesRequest,
+    CreateBundledSourceRequest, DeleteSourceRequest, DiscoverSourcesRequest, GetSourceInfoRequest,
     ImportSourceRequest, ListSourcesRequest, QueryTestFailure, QueryTestSuccess, Source,
-    SourceInputKind, SourceInputSpec, SourceOrigin, SourceSecret, SourceVariable,
+    SourceInfo, SourceInputKind, SourceInputSpec, SourceOrigin, SourceSecret, SourceVariable,
     ValidateSourceRequest, ValidateSourceResponse, query_test_result,
 };
 use coral_client::{AppClient, default_workspace};
@@ -52,9 +52,7 @@ impl TableDisplayLimit {
     pub(crate) const DEFAULT: Self = Self::Max(MAX_TABLES_PER_SCHEMA);
 }
 
-pub(crate) async fn discover_sources(
-    app: &AppClient,
-) -> Result<Vec<AvailableSource>, anyhow::Error> {
+pub(crate) async fn discover_sources(app: &AppClient) -> Result<Vec<SourceInfo>, anyhow::Error> {
     Ok(app
         .source_client()
         .discover_sources(Request::new(DiscoverSourcesRequest {
@@ -132,6 +130,69 @@ pub(crate) fn load_validated_manifest_file(
     let manifest_yaml = std::fs::read_to_string(file)?;
     let manifest = parse_source_manifest_yaml(manifest_yaml.as_str())?;
     Ok((manifest_yaml, manifest))
+}
+
+pub(crate) async fn print_source_info(
+    app: &AppClient,
+    name: &str,
+    verbose: bool,
+) -> Result<(), anyhow::Error> {
+    let source = app
+        .source_client()
+        .get_source_info(Request::new(GetSourceInfoRequest {
+            workspace: Some(default_workspace()),
+            name: source_name_arg(Some(name))?,
+        }))
+        .await?
+        .into_inner();
+    print_source_info_response(&source, verbose);
+    Ok(())
+}
+
+fn print_source_info_response(source: &SourceInfo, verbose: bool) {
+    let status = if source.installed {
+        style("installed").green().to_string()
+    } else {
+        style("not installed").dim().to_string()
+    };
+
+    println!("{}", style(&source.name).bold());
+    println!("  Status:      {status}");
+    println!("  Origin:      {}", source_origin_label(source.origin));
+    println!("  Version:     {}", source.version);
+    if !source.description.is_empty() {
+        println!("  Description: {}", source.description);
+    }
+
+    if source.inputs.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("  {}", style("Inputs").bold());
+    for input in &source.inputs {
+        let kind_label = match SourceInputKind::try_from(input.kind) {
+            Ok(SourceInputKind::Variable) => "variable",
+            Ok(SourceInputKind::Secret) => "secret",
+            Ok(SourceInputKind::Unspecified) | Err(_) => "unknown",
+        };
+        let requirement = if input.required {
+            "required"
+        } else {
+            "optional"
+        };
+        println!(
+            "    {} {}",
+            style(&input.key).bold(),
+            style(format!("({kind_label}, {requirement})")).dim()
+        );
+        if !input.default_value.is_empty() {
+            println!("      default: {}", input.default_value);
+        }
+        if verbose && !input.hint.is_empty() {
+            println!("      {}", style(&input.hint).dim());
+        }
+    }
 }
 
 pub(crate) async fn delete_source(app: &AppClient, name: &str) -> Result<(), anyhow::Error> {
