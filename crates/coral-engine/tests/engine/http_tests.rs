@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use coral_engine::{
-    CoralQuery, CoreError, EngineExtensions, QueryRuntimeContext, QueryRuntimeProvider,
+    CoralQuery, CoreError, EngineExtensions, QueryRuntimeConfig, QueryRuntimeContext,
     RequestAuthenticator, RequestAuthenticatorError, StatusCode,
 };
 use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
@@ -13,7 +13,7 @@ use wiremock::matchers::{
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::harness::{
-    TestRuntime, build_source, build_source_with_secrets, execution_to_rows, users_rows,
+    build_source, build_source_with_secrets, execution_to_rows, test_runtime, users_rows,
 };
 
 fn base_http_manifest(name: &str, base_url: &str) -> Value {
@@ -81,21 +81,13 @@ impl RequestAuthenticator for TestRequestAuthenticator {
     }
 }
 
-struct TestAuthRuntime;
-
-impl QueryRuntimeProvider for TestAuthRuntime {
-    fn runtime_context(&self) -> QueryRuntimeContext {
-        QueryRuntimeContext::default()
-    }
-
-    fn engine_extensions(&self) -> EngineExtensions {
-        let mut extensions = EngineExtensions::default();
-        extensions.request_authenticators.insert(
-            "test_signer".to_string(),
-            Arc::new(TestRequestAuthenticator),
-        );
-        extensions
-    }
+fn test_auth_runtime() -> QueryRuntimeConfig {
+    let mut extensions = EngineExtensions::default();
+    extensions.request_authenticators.insert(
+        "test_signer".to_string(),
+        Arc::new(TestRequestAuthenticator),
+    );
+    QueryRuntimeConfig::new(QueryRuntimeContext::default(), extensions)
 }
 
 #[tokio::test]
@@ -112,7 +104,7 @@ async fn select_all_from_http_source() {
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &[source],
-            &TestRuntime,
+            test_runtime(),
             "SELECT id, name, email FROM http_users.users ORDER BY id",
         )
         .await
@@ -136,7 +128,7 @@ async fn select_with_column_projection() {
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &[source],
-            &TestRuntime,
+            test_runtime(),
             "SELECT name, email FROM http_projection.users ORDER BY name",
         )
         .await
@@ -167,7 +159,7 @@ async fn select_with_order_by() {
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &[source],
-            &TestRuntime,
+            test_runtime(),
             "SELECT name FROM http_order.users ORDER BY name DESC",
         )
         .await
@@ -198,7 +190,7 @@ async fn select_with_limit() {
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &[source],
-            &TestRuntime,
+            test_runtime(),
             "SELECT * FROM http_limit.users LIMIT 2",
         )
         .await
@@ -233,7 +225,7 @@ async fn select_with_where_filter_pushdown() {
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &[source],
-            &TestRuntime,
+            test_runtime(),
             "SELECT id, name FROM http_filter.users WHERE id = 2",
         )
         .await
@@ -282,7 +274,7 @@ async fn boolean_filter_bool_is_predicate_sends_json_bool_body() {
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &[source],
-            &TestRuntime,
+            test_runtime(),
             "SELECT id, include_archived FROM http_bool_filter.users WHERE include_archived IS FALSE",
         )
         .await
@@ -306,7 +298,7 @@ async fn select_count_aggregation() {
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &[source],
-            &TestRuntime,
+            test_runtime(),
             "SELECT COUNT(*) AS n FROM http_count.users",
         )
         .await
@@ -350,7 +342,7 @@ async fn pagination_page_mode() {
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &[source],
-            &TestRuntime,
+            test_runtime(),
             "SELECT id, name, email FROM http_page.users ORDER BY id",
         )
         .await
@@ -394,7 +386,7 @@ async fn pagination_offset_mode() {
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &[source],
-            &TestRuntime,
+            test_runtime(),
             "SELECT id, name, email FROM http_offset.users ORDER BY id",
         )
         .await
@@ -434,7 +426,7 @@ async fn pagination_link_header() {
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &[source],
-            &TestRuntime,
+            test_runtime(),
             "SELECT id, name, email FROM http_link.users ORDER BY id",
         )
         .await
@@ -472,7 +464,7 @@ async fn auth_headers_sent_correctly() {
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &[source],
-            &TestRuntime,
+            test_runtime(),
             "SELECT COUNT(*) AS n FROM http_auth.users",
         )
         .await
@@ -508,7 +500,7 @@ async fn custom_authenticator_signs_final_request() {
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &[source],
-            &TestAuthRuntime,
+            test_auth_runtime(),
             "SELECT COUNT(*) AS n FROM http_custom_auth.users",
         )
         .await
@@ -530,7 +522,7 @@ async fn api_returns_500() {
 
     let source = build_source(base_http_manifest("http_500", &server.uri()));
 
-    let error = CoralQuery::execute_sql(&[source], &TestRuntime, "SELECT * FROM http_500.users")
+    let error = CoralQuery::execute_sql(&[source], test_runtime(), "SELECT * FROM http_500.users")
         .await
         .expect_err("500 should fail");
 
@@ -559,7 +551,7 @@ async fn api_returns_401() {
 
     let source = build_source(base_http_manifest("http_401", &server.uri()));
 
-    let error = CoralQuery::execute_sql(&[source], &TestRuntime, "SELECT * FROM http_401.users")
+    let error = CoralQuery::execute_sql(&[source], test_runtime(), "SELECT * FROM http_401.users")
         .await
         .expect_err("401 should fail");
 
@@ -678,7 +670,7 @@ async fn slack_messages_have_formatted_ts_and_permalink() {
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &[source],
-            &TestRuntime,
+            test_runtime(),
             "SELECT ts, permalink, user_id, text FROM slack_ts.messages WHERE channel = 'C123456' ORDER BY ts",
         )
         .await
@@ -716,10 +708,13 @@ async fn missing_required_filter_surfaces_structured_error() {
     ]);
     let source = build_source(manifest);
 
-    let error =
-        CoralQuery::execute_sql(&[source], &TestRuntime, "SELECT * FROM http_required.users")
-            .await
-            .expect_err("query without the required filter should fail");
+    let error = CoralQuery::execute_sql(
+        &[source],
+        test_runtime(),
+        "SELECT * FROM http_required.users",
+    )
+    .await
+    .expect_err("query without the required filter should fail");
 
     assert_eq!(error.status_code(), StatusCode::FailedPrecondition);
     match &error {
@@ -748,10 +743,13 @@ async fn api_returns_malformed_json() {
 
     let source = build_source(base_http_manifest("http_bad_json", &server.uri()));
 
-    let error =
-        CoralQuery::execute_sql(&[source], &TestRuntime, "SELECT * FROM http_bad_json.users")
-            .await
-            .expect_err("malformed json should fail");
+    let error = CoralQuery::execute_sql(
+        &[source],
+        test_runtime(),
+        "SELECT * FROM http_bad_json.users",
+    )
+    .await
+    .expect_err("malformed json should fail");
 
     assert_eq!(error.status_code(), StatusCode::Internal);
     match error {
