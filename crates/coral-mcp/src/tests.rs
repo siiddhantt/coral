@@ -257,6 +257,10 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     let tables_json =
         serde_json::from_str::<serde_json::Value>(tables_text).expect("parse tables resource");
     assert_eq!(tables_json["tables"][0]["name"], "local_messages.events");
+    assert_eq!(
+        tables_json["tables"][0]["sql_reference"],
+        "local_messages.events"
+    );
 
     let updated_guide = client
         .read_resource(ReadResourceRequestParams::new("coral://guide"))
@@ -282,6 +286,10 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     assert_eq!(structured_tables["has_more"], false);
     assert_eq!(
         structured_tables["tables"][0]["name"],
+        "local_messages.events"
+    );
+    assert_eq!(
+        structured_tables["tables"][0]["sql_reference"],
         "local_messages.events"
     );
     assert!(structured_tables["tables"][0]["columns"].is_null());
@@ -509,10 +517,15 @@ async fn mcp_tool_error_does_not_end_session() {
         .call_tool(CallToolRequestParams::new("list_tables"))
         .await
         .expect("list tables after error");
+    let structured_tables_after_error = tables_after_error
+        .structured_content
+        .expect("structured content");
     assert_eq!(
-        tables_after_error
-            .structured_content
-            .expect("structured content")["tables"][0]["name"],
+        structured_tables_after_error["tables"][0]["name"],
+        "local_messages.events"
+    );
+    assert_eq!(
+        structured_tables_after_error["tables"][0]["sql_reference"],
         "local_messages.events"
     );
     assert_eq!(tables_after_error.is_error, Some(false));
