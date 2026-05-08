@@ -5,6 +5,16 @@ rust-checks:
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 
 # ----------------------------------------------------------------------------
+# Protobuf API linting
+# ----------------------------------------------------------------------------
+# Lints crates/coral-api/proto with Buf.
+#
+#   make lint-proto   # check protobuf style and API-shape rules
+
+lint-proto:
+	cd crates/coral-api && buf lint
+
+# ----------------------------------------------------------------------------
 # Source manifest linting
 # ----------------------------------------------------------------------------
 # Lints sources/ with ryl (Rust-native yamllint port).
