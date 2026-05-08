@@ -12,12 +12,37 @@ use std::sync::Arc;
 use arrow::array::{Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use assert_cmd::Command;
 use coral_api::v1::{
     DiscoverSourcesResponse, ExecuteSqlResponse, ListSourcesResponse, SourceInfo, SourceOrigin,
 };
 use tonic::Code;
 
 use harness::{MockServer, MockServerConfig, encode_arrow_ipc_stream};
+
+#[cfg(feature = "embedded-ui")]
+#[test]
+fn ui_help_does_not_require_app_bootstrap() {
+    let assert = Command::cargo_bin("coral")
+        .expect("cargo bin")
+        .args(["ui", "--help"])
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
+    assert!(
+        stdout.contains("embedded Coral UI"),
+        "expected ui help text: {stdout}"
+    );
+    assert!(
+        stdout.contains("--port <PORT>"),
+        "expected ui port option: {stdout}"
+    );
+    assert!(
+        stdout.contains("--no-open"),
+        "expected ui no-open option: {stdout}"
+    );
+}
 
 fn nonempty_lines(output: &str) -> Vec<&str> {
     output
