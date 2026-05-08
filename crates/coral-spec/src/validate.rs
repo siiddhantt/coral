@@ -14,11 +14,13 @@ pub(crate) fn validate_table_names<'a>(
 ) -> Result<()> {
     let mut seen_tables = HashSet::new();
     for table_name in table_names {
-        if !seen_tables.insert(table_name) {
+        let key = table_name.to_ascii_lowercase();
+        if seen_tables.contains(&key) {
             return Err(ManifestError::validation(format!(
-                "source '{schema}' has duplicate table '{table_name}'"
+                "source '{schema}' has duplicate table '{key}'"
             )));
         }
+        seen_tables.insert(key);
     }
 
     Ok(())
@@ -591,17 +593,16 @@ pub(crate) fn validate_template(
 mod tests {
     use std::collections::HashMap;
 
+    use super::{
+        validate_filters_and_column_exprs, validate_http_function, validate_http_function_names,
+        validate_http_table, validate_table_names,
+    };
     use crate::common::{
         ColumnSpec, ExprSpec, FilterMode, FilterSpec, FunctionArgBinding, PaginationSpec,
         QueryParamSpec, RequestRouteSpec, RequestSpec, SourceTableFunctionSpec,
         TableFunctionArgSpec, ValueSourceSpec,
     };
     use crate::template::ParsedTemplate;
-
-    use super::{
-        validate_filters_and_column_exprs, validate_http_function, validate_http_function_names,
-        validate_http_table,
-    };
 
     fn test_column() -> ColumnSpec {
         ColumnSpec {
@@ -660,6 +661,21 @@ mod tests {
             pagination: PaginationSpec::default(),
             columns: vec![],
         }
+    }
+
+    #[test]
+    fn validate_table_names_rejects_duplicate_table_names() {
+        let schema = "github";
+        let table_names = ["issues", "prs", "Issues"];
+
+        let error = validate_table_names(schema, table_names)
+            .expect_err("expected duplicate table to be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("source 'github' has duplicate table 'issues'")
+        );
     }
 
     #[test]
