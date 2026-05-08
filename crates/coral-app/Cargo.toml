@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 arrow.workspace = true
 chrono.workspace = true
-directories.workspace = true
+etcetera.workspace = true
 fs2.workspace = true
 opentelemetry.workspace = true
 opentelemetry-appender-tracing.workspace = true
