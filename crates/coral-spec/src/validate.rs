@@ -487,7 +487,7 @@ fn validate_expr(expr: &ExprSpec, known_filters: &HashSet<String>, context: &str
                 "{context} references unknown filter '{filter_key}'"
             )));
         }
-        ExprSpec::FormatTimestamp { expr, .. } => {
+        ExprSpec::FormatTimestamp { expr, .. } | ExprSpec::Base64Decode { expr } => {
             validate_expr(expr, known_filters, context)?;
         }
         ExprSpec::Replace { expr, from, .. } => {
@@ -1025,6 +1025,25 @@ mod tests {
             error
                 .to_string()
                 .contains("has replace expression with empty 'from' value")
+        );
+    }
+
+    #[test]
+    fn validate_base64_decode_propagates_inner_expr_errors() {
+        let column = column_with_expr(ExprSpec::Base64Decode {
+            expr: Box::new(ExprSpec::FromFilter {
+                key: "missing".to_string(),
+            }),
+        });
+
+        let error =
+            validate_filters_and_column_exprs(&test_filters(), &[column], "demo", "messages")
+                .expect_err("unknown filter in base64_decode should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("references unknown filter 'missing'")
         );
     }
 }
