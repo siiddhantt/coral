@@ -136,7 +136,7 @@ pub fn build_root_span(traceparent: Option<&str>) -> tracing::Span {
         let parent_cx = opentelemetry::global::get_text_map_propagator(|p| {
             p.extract(&StringMapExtractor(&carrier))
         });
-        let _ = span.set_parent(parent_cx);
+        drop(span.set_parent(parent_cx));
     }
     span
 }
@@ -161,7 +161,7 @@ pub(crate) fn init_tracing(
     Ok(())
 }
 
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "Initialization configures three OTLP pipelines in one place"
 )]

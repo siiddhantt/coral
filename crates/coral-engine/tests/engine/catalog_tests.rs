@@ -1,3 +1,9 @@
+#![allow(
+    clippy::indexing_slicing,
+    clippy::string_slice,
+    reason = "test code: assertion-style indexing is idiomatic in tests"
+)]
+
 use std::collections::BTreeMap;
 
 use coral_engine::{ColumnInfo, CoralQuery, QuerySource, TableInfo};
@@ -245,7 +251,7 @@ fn table_summary(table: &TableInfo) -> (String, String, String) {
     )
 }
 
-#[allow(
+#[expect(
     dead_code,
     reason = "Reserved for targeted schema assertions as this suite grows."
 )]

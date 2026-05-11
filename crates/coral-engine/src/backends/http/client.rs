@@ -139,7 +139,7 @@ impl HttpSourceClient {
         })
     }
 
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "Paginated fetch logic is stateful and easier to audit in one sequential function"
     )]
@@ -561,7 +561,7 @@ fn validate_header_inputs(
     Ok(())
 }
 
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "HTTP request execution keeps retry, auth, logging, and response handling in one audited flow"
 )]
@@ -1214,7 +1214,15 @@ fn sanitize_trace_url(raw: &str) -> String {
     };
     url.set_query(None);
     url.set_fragment(None);
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "set_username/set_password only fail for cannot-be-a-base URLs; HTTP URLs always have a host"
+    )]
     let _ = url.set_username("");
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "set_username/set_password only fail for cannot-be-a-base URLs; HTTP URLs always have a host"
+    )]
     let _ = url.set_password(None);
     url.to_string()
 }
@@ -1334,7 +1342,10 @@ fn set_path_value_at(cursor: &mut Value, path: &[String], value: Value) -> Resul
             }
             array.resize_with(index + 1, || Value::Null);
         }
-        return set_path_value_at(&mut array[index], tail, value);
+        let next = array.get_mut(index).ok_or_else(|| {
+            DataFusionError::Execution("failed to access JSON array path".to_string())
+        })?;
+        return set_path_value_at(next, tail, value);
     }
 
     if !cursor.is_object() {
@@ -1347,7 +1358,7 @@ fn set_path_value_at(cursor: &mut Value, path: &[String], value: Value) -> Resul
     set_path_value_at(next, tail, value)
 }
 
-#[allow(
+#[expect(
     clippy::unnecessary_wraps,
     reason = "Keeping a Result return type preserves a uniform extraction interface for callers"
 )]
@@ -1392,7 +1403,7 @@ fn extract_rows(target: &HttpFetchTarget, payload: &Value) -> Result<Vec<Value>>
                             let Some(value) = pair.get(1).and_then(Value::as_f64) else {
                                 continue;
                             };
-                            #[allow(
+                            #[expect(
                                 clippy::cast_possible_truncation,
                                 reason = "Series timestamps are integral epoch values that fit in i64"
                             )]
@@ -1468,7 +1479,9 @@ fn extract_next_link_url(
         let end = item.find('>').ok_or_else(|| {
             DataFusionError::Execution(format!("invalid pagination Link header item '{item}'"))
         })?;
-        let next_raw = &item[start + 1..end];
+        let next_raw = item.get(start + 1..end).ok_or_else(|| {
+            DataFusionError::Execution(format!("invalid pagination Link header item '{item}'"))
+        })?;
         let next_url = base.join(next_raw).map_err(|e| {
             DataFusionError::Execution(format!("invalid pagination next link '{next_raw}': {e}"))
         })?;
@@ -1794,6 +1807,22 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("pagination next link must stay on origin https://api.example.com")
+        );
+    }
+
+    #[test]
+    fn extract_next_link_url_rejects_misordered_link_delimiters() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "link",
+            HeaderValue::from_static(">/v1/resources?page=2<; rel=\"next\""),
+        );
+
+        let err = extract_next_link_url(&headers, "https://api.example.com", false).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("invalid pagination Link header item")
         );
     }
 
@@ -2494,8 +2523,9 @@ mod tests {
                 }]
             }]
         }));
+        let table = manifest.tables.first().expect("HTTP table");
         assert!(matches!(
-            manifest.tables[0].response.row_strategy,
+            table.response.row_strategy,
             RowStrategy::DictEntries
         ));
     }

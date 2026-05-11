@@ -1,7 +1,10 @@
 #![allow(
+    clippy::indexing_slicing,
+    clippy::panic_in_result_fn,
+    clippy::string_slice,
     missing_docs,
     unused_crate_dependencies,
-    reason = "Integration tests only use a subset of the package dependency graph."
+    reason = "Integration test: assertion-style indexing is idiomatic; only a subset of dependencies are used."
 )]
 #![cfg(feature = "cli-test-server")]
 

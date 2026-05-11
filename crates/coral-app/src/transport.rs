@@ -55,7 +55,7 @@ pub(crate) fn grpc_span(
         grpc.code = tracing::field::Empty,
         status = tracing::field::Empty,
     );
-    let _ = span.set_parent(parent_cx);
+    drop(span.set_parent(parent_cx));
     span
 }
 
@@ -105,10 +105,6 @@ fn grpc_code_label(code: Code) -> &'static str {
     }
 }
 
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "used directly as a map_err adapter across tonic service handlers"
-)]
 pub(crate) fn query_status(error: QueryManagerError) -> Status {
     match error {
         QueryManagerError::App(error) => app_status(error),
@@ -214,6 +210,11 @@ pub(crate) fn validate_source_response_to_proto(
 
 #[cfg(test)]
 mod tests {
+    #![expect(
+        clippy::indexing_slicing,
+        reason = "proto shape assertions intentionally fail loudly in tests"
+    )]
+
     use coral_api::v1::{QueryTestFailure, Workspace, query_test_result};
     use tonic::Code;
 

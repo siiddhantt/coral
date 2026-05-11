@@ -621,10 +621,6 @@ pub(crate) struct MockServer {
 }
 
 impl MockServer {
-    #[allow(
-        dead_code,
-        reason = "shared harness helpers are used by different integration test crates"
-    )]
     pub(crate) async fn start() -> Self {
         Self::start_with_config(MockServerConfig::default()).await
     }
@@ -651,7 +647,7 @@ impl MockServer {
                     captured: source_captured,
                 }))
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
-                    let _ = shutdown_rx.await;
+                    drop(shutdown_rx.await);
                 })
                 .await
         });
@@ -663,10 +659,6 @@ impl MockServer {
         }
     }
 
-    #[allow(
-        dead_code,
-        reason = "shared harness helpers are used by different integration test crates"
-    )]
     pub(crate) async fn start_with_validate_source_response(
         validate_source_response: ValidateSourceResponse,
     ) -> Self {
@@ -676,10 +668,6 @@ impl MockServer {
         .await
     }
 
-    #[allow(
-        dead_code,
-        reason = "Integration test crates share this harness, but each target only uses the helpers it needs."
-    )]
     pub(crate) fn cmd(&self) -> Command {
         let mut cmd = Command::cargo_bin("coral").expect("cargo bin");
         cmd.env("CORAL_ENDPOINT", &self.endpoint_uri);
@@ -742,16 +730,16 @@ impl MockServer {
             .clone()
     }
 
-    #[allow(
-        dead_code,
-        reason = "Integration test crates share this harness, but each target only uses the helpers it needs."
-    )]
     pub(crate) fn endpoint_uri(&self) -> &str {
         &self.endpoint_uri
     }
 
     pub(crate) async fn shutdown(mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "send error means the receiver is already dropped, which is fine during shutdown"
+            )]
             let _ = tx.send(());
         }
         self.task.await.expect("join").expect("server");

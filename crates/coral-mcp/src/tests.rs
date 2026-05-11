@@ -1,3 +1,9 @@
+#![allow(
+    clippy::indexing_slicing,
+    clippy::string_slice,
+    reason = "test code: assertion-style indexing is idiomatic in tests"
+)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -164,7 +170,7 @@ fn text_content(result: &rmcp::model::ReadResourceResult) -> &str {
 }
 
 #[tokio::test]
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "This focused session test still verifies multiple discovery and resource refresh assertions in one end-to-end flow."
 )]
