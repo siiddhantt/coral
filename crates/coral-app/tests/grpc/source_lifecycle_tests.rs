@@ -1156,10 +1156,21 @@ origin = "imported"
 }
 
 #[tokio::test]
-async fn config_persists_across_rebuilds_without_local_trace_state() {
+async fn config_persists_across_rebuilds_without_trace_history_state() {
     let temp = TempDir::new().expect("temp dir");
     let manifest_yaml = fixture_manifest_yaml(temp.path());
     let config_dir = temp.path().join("coral-config");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.toml"),
+        r"
+version = 1
+
+[trace_history]
+enabled = false
+",
+    )
+    .expect("write config");
 
     {
         let harness = GrpcHarness::start_with_config_dir(config_dir.clone()).await;
@@ -1180,8 +1191,8 @@ async fn config_persists_across_rebuilds_without_local_trace_state() {
         .await;
     assert_eq!(rows[0]["n"], 2);
     assert!(
-        !config_dir.join("state").join("state.sqlite3").exists(),
-        "trace/state sqlite should not be created"
+        !config_dir.join("telemetry").join("traces").exists(),
+        "local trace store should not be created"
     );
 }
 
@@ -1343,6 +1354,10 @@ async fn adding_source_preserves_otel_config_and_existing_sources() {
 endpoint = "http://localhost:4318"
 headers = "from=config"
 
+[trace_history]
+enabled = false
+retention_days = 3
+
 [workspaces.default.sources.demo]
 version = "0.1.0"
 variables = {}
@@ -1374,6 +1389,18 @@ origin = "imported"
     assert!(
         config_raw.contains("headers = \"from=config\""),
         "otel headers should be preserved"
+    );
+    assert!(
+        config_raw.contains("[trace_history]"),
+        "trace history section should be preserved"
+    );
+    assert!(
+        config_raw.contains("enabled = false"),
+        "trace history enabled flag should be preserved"
+    );
+    assert!(
+        config_raw.contains("retention_days = 3"),
+        "trace history retention should be preserved"
     );
 
     // The pre-existing source must still be present.
