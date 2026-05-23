@@ -66,7 +66,7 @@ tables:
     description: >
       Lists all verified properties (sites) accessible to the authenticated
       user. Returns the site URL and the user's permission level. Use the
-      site_url values from this table as required filter values in the
+      encoded_site_url values from this table as required filter values in the
       performance tables.
     guide: >
       Start here to discover site URLs.
