@@ -3,8 +3,9 @@ version: 0.1.0
 dsl_version: 3
 backend: http
 description: >-
-  Query Google Search Console sites, search performance by date, query, page,
-  country, and device from the Google Search Console API.
+  Query Google Search Console sites, sitemaps, and search performance by date,
+  query, page, country, device, and search appearance from the Google Search
+  Console API.
 inputs:
   GOOGLE_SEARCH_CONSOLE_ACCESS_TOKEN:
     kind: secret
@@ -27,10 +28,10 @@ inputs:
             flow:
               type: authorization_code
               pkce: required
-            redirect_uri: http://127.0.0.1
+            redirect_uri: http://127.0.0.1/oauth/callback
             redirect_uri_port_mode: random
             endpoints:
-              authorization_url: https://accounts.google.com/o/oauth2/v2/auth
+              authorization_url: https://accounts.google.com/o/oauth2/v2/auth?access_type=offline&prompt=consent
               token_url: https://oauth2.googleapis.com/token
             client:
               id:
@@ -122,11 +123,136 @@ tables:
           path:
             - permissionLevel
 
+  - name: sitemaps
+    description: >
+      Lists submitted sitemap entries for a Search Console property, including
+      sitemap index entries when a sitemap_index filter is provided.
+    guide: >
+      Requires encoded_site_url. Start with google_search_console.sites to
+      discover the required encoded_site_url value. `SELECT path, type,
+      last_submitted, warnings, errors FROM google_search_console.sitemaps
+      WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'`.
+    filters:
+      - name: encoded_site_url
+        required: true
+        description: URL-encoded property URL from google_search_console.sites.
+      - name: sitemap_index
+        required: false
+        description: Optional sitemap index URL used to list entries within that index.
+    request:
+      method: GET
+      path: /sites/{{filter.encoded_site_url}}/sitemaps
+      query:
+        - name: sitemapIndex
+          from: filter
+          key: sitemap_index
+    response:
+      rows_path:
+        - sitemap
+    pagination:
+      mode: none
+    columns:
+      - name: encoded_site_url
+        type: Utf8
+        nullable: false
+        virtual: true
+        description: Encoded site URL from required filter.
+        expr:
+          kind: from_filter
+          key: encoded_site_url
+      - name: sitemap_index
+        type: Utf8
+        nullable: true
+        virtual: true
+        description: Sitemap index URL from optional filter, when provided.
+        expr:
+          kind: from_filter
+          key: sitemap_index
+      - name: path
+        type: Utf8
+        nullable: false
+        description: URL of the sitemap.
+        expr:
+          kind: path
+          path:
+            - path
+      - name: last_submitted
+        type: Timestamp
+        nullable: true
+        description: Last time this sitemap was submitted.
+        expr:
+          kind: format_timestamp
+          input: iso8601
+          expr:
+            kind: path
+            path:
+              - lastSubmitted
+      - name: last_downloaded
+        type: Timestamp
+        nullable: true
+        description: Last time Google downloaded this sitemap.
+        expr:
+          kind: format_timestamp
+          input: iso8601
+          expr:
+            kind: path
+            path:
+              - lastDownloaded
+      - name: is_pending
+        type: Boolean
+        nullable: true
+        description: Whether processing is still pending for this sitemap.
+        expr:
+          kind: path
+          path:
+            - isPending
+      - name: is_sitemaps_index
+        type: Boolean
+        nullable: true
+        description: Whether this sitemap is a sitemap index.
+        expr:
+          kind: path
+          path:
+            - isSitemapsIndex
+      - name: type
+        type: Utf8
+        nullable: true
+        description: Sitemap type, such as sitemap, rssFeed, atomFeed, urlList, or notSitemap.
+        expr:
+          kind: path
+          path:
+            - type
+      - name: warnings
+        type: Int64
+        nullable: true
+        description: Number of non-critical warnings found for this sitemap.
+        expr:
+          kind: path
+          path:
+            - warnings
+      - name: errors
+        type: Int64
+        nullable: true
+        description: Number of errors found for this sitemap.
+        expr:
+          kind: path
+          path:
+            - errors
+      - name: contents
+        type: Json
+        nullable: true
+        description: Content-type breakdown reported for this sitemap.
+        expr:
+          kind: path
+          path:
+            - contents
+
   - name: search_performance
     description: >
       Aggregate search performance metrics (clicks, impressions, CTR,
       position) for a site within a date range, without dimension grouping.
       Returns a single row with totals.
+    fetch_limit_default: 1
     guide: >
       Requires encoded_site_url, start_date, and end_date filters. The encoded_site_url
       must match a value from google_search_console.sites exactly.
@@ -224,6 +350,7 @@ tables:
       Search performance metrics grouped by date. Each row represents one
       day's clicks, impressions, CTR, and average position. Days with zero
       data are omitted by the API.
+    fetch_limit_default: 1000
     guide: >
       Requires encoded_site_url, start_date, and end_date filters.
       `SELECT date, clicks, impressions, ctr, position
@@ -262,9 +389,7 @@ tables:
       rows_path:
         - rows
     pagination:
-      mode: offset
-      offset_param: startRow
-      offset_start: 0
+      mode: none
       page_size:
         default: 25000
         max: 25000
@@ -342,6 +467,7 @@ tables:
       Search performance metrics grouped by search query (keyword). Each
       row represents one query's clicks, impressions, CTR, and average
       position. Results are sorted by click count descending.
+    fetch_limit_default: 1000
     guide: >
       Requires encoded_site_url, start_date, and end_date filters.
       `SELECT query, clicks, impressions, ctr, position
@@ -381,9 +507,7 @@ tables:
       rows_path:
         - rows
     pagination:
-      mode: offset
-      offset_param: startRow
-      offset_start: 0
+      mode: none
       page_size:
         default: 25000
         max: 25000
@@ -460,6 +584,7 @@ tables:
     description: >
       Search performance metrics grouped by landing page URL. Each row
       represents one page's clicks, impressions, CTR, and average position.
+    fetch_limit_default: 1000
     guide: >
       Requires encoded_site_url, start_date, and end_date filters.
       `SELECT page, clicks, impressions, ctr, position
@@ -499,9 +624,7 @@ tables:
       rows_path:
         - rows
     pagination:
-      mode: offset
-      offset_param: startRow
-      offset_start: 0
+      mode: none
       page_size:
         default: 25000
         max: 25000
@@ -578,7 +701,8 @@ tables:
     description: >
       Search performance metrics grouped by country. Each row represents
       one country's clicks, impressions, CTR, and average position.
-      Countries use ISO 3166-1 alpha-3 codes (e.g. USA, GBR, DEU).
+      Countries use lowercase ISO 3166-1 alpha-3 codes (e.g. usa, gbr, deu).
+    fetch_limit_default: 1000
     guide: >
       Requires encoded_site_url, start_date, and end_date filters.
       `SELECT country, clicks, impressions, ctr, position
@@ -618,9 +742,7 @@ tables:
       rows_path:
         - rows
     pagination:
-      mode: offset
-      offset_param: startRow
-      offset_start: 0
+      mode: none
       page_size:
         default: 25000
         max: 25000
@@ -654,7 +776,7 @@ tables:
       - name: country
         type: Utf8
         nullable: true
-        description: Country code (ISO 3166-1 alpha-3, e.g. USA, GBR, DEU).
+        description: Country code (ISO 3166-1 alpha-3, e.g. usa, gbr, deu).
         expr:
           kind: path
           path:
@@ -698,6 +820,7 @@ tables:
       Search performance metrics grouped by device type. Each row
       represents one device type's clicks, impressions, CTR, and average
       position. Device values are MOBILE, DESKTOP, or TABLET.
+    fetch_limit_default: 1000
     guide: >
       Requires encoded_site_url, start_date, and end_date filters.
       `SELECT device, clicks, impressions, ctr, position
@@ -736,9 +859,7 @@ tables:
       rows_path:
         - rows
     pagination:
-      mode: offset
-      offset_param: startRow
-      offset_start: 0
+      mode: none
       page_size:
         default: 25000
         max: 25000
@@ -790,6 +911,125 @@ tables:
         type: Int64
         nullable: true
         description: Number of times the site appeared in search results.
+        expr:
+          kind: path
+          path:
+            - impressions
+      - name: ctr
+        type: Float64
+        nullable: true
+        description: Click-through rate (clicks / impressions).
+        expr:
+          kind: path
+          path:
+            - ctr
+      - name: position
+        type: Float64
+        nullable: true
+        description: Average position in search results.
+        expr:
+          kind: path
+          path:
+            - position
+
+  - name: performance_by_search_appearance
+    description: >
+      Search performance metrics grouped by Search appearance feature. Use this
+      table to discover the Search appearance values available for a property
+      and compare clicks, impressions, CTR, and average position by result
+      feature.
+    fetch_limit_default: 1000
+    guide: >
+      Requires encoded_site_url, start_date, and end_date filters.
+      `SELECT search_appearance, clicks, impressions, ctr, position
+      FROM google_search_console.performance_by_search_appearance
+      WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
+      AND start_date = '2025-01-01' AND end_date = '2025-01-31'
+      LIMIT 50`.
+    filters:
+      - name: encoded_site_url
+        required: true
+      - name: start_date
+        required: true
+      - name: end_date
+        required: true
+    request:
+      method: POST
+      path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
+      body:
+        - path:
+            - startDate
+          from: filter
+          key: start_date
+        - path:
+            - endDate
+          from: filter
+          key: end_date
+        - path:
+            - dimensions
+          from: literal
+          value:
+            - searchAppearance
+        - path:
+            - rowLimit
+          from: literal
+          value: 25000
+    response:
+      rows_path:
+        - rows
+    pagination:
+      mode: none
+      page_size:
+        default: 25000
+        max: 25000
+        body_path:
+          - rowLimit
+    columns:
+      - name: encoded_site_url
+        type: Utf8
+        nullable: false
+        virtual: true
+        description: Encoded site URL from required filter.
+        expr:
+          kind: from_filter
+          key: encoded_site_url
+      - name: start_date
+        type: Utf8
+        nullable: false
+        virtual: true
+        description: Start date from required filter (YYYY-MM-DD).
+        expr:
+          kind: from_filter
+          key: start_date
+      - name: end_date
+        type: Utf8
+        nullable: false
+        virtual: true
+        description: End date from required filter (YYYY-MM-DD).
+        expr:
+          kind: from_filter
+          key: end_date
+      - name: search_appearance
+        type: Utf8
+        nullable: true
+        description: Search result feature value returned by Search Console.
+        expr:
+          kind: path
+          path:
+            - keys
+            - "0"
+      - name: clicks
+        type: Int64
+        nullable: true
+        description: Click count from Google Search results.
+        expr:
+          kind: path
+          path:
+            - clicks
+      - name: impressions
+        type: Int64
+        nullable: true
+        description: Number of times the result feature appeared in search results.
         expr:
           kind: path
           path:

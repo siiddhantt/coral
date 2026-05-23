@@ -1,23 +1,25 @@
 # Google Search Console
 
-**Version:** 0.1.0  
-**Backend:** HTTP  
-**Tables:** 7  
-**Base URL:** `https://www.googleapis.com/webmasters/v3`  
+**Version:** 0.1.0
+**Backend:** HTTP
+**Tables:** 9
+**Base URL:** `https://www.googleapis.com/webmasters/v3`
 
-Query Google Search Console for verified properties (sites) and search performance metrics (clicks, impressions, CTR, position) filtered by date range and grouped by dimensions such as date, query, page, country, or device. The performance tables require a `encoded_site_url`, `start_date`, and `end_date` filter, making them useful for combining with other analytics sources or extracting specific SEO snapshots.
+Query Google Search Console for verified properties, submitted sitemaps, and search performance metrics (clicks, impressions, CTR, position) filtered by date range and grouped by dimensions such as date, query, page, country, device, or Search appearance. The performance tables require an `encoded_site_url`, `start_date`, and `end_date` filter, making them useful for combining with other analytics sources or extracting specific SEO snapshots.
 
 ## Tables
 
 | Table | Description | Required filters | Optional filters |
 | :--- | :--- | :--- | :--- |
 | `sites` | Lists all verified properties accessible to the user. | | |
+| `sitemaps` | Lists submitted sitemap entries for a property. | `encoded_site_url` | `sitemap_index` |
 | `search_performance` | Aggregate metrics without dimension grouping. | `encoded_site_url`, `start_date`, `end_date` | |
 | `performance_by_date` | Metrics grouped by date. | `encoded_site_url`, `start_date`, `end_date` | |
 | `performance_by_query` | Metrics grouped by search query (keyword). | `encoded_site_url`, `start_date`, `end_date` | |
 | `performance_by_page` | Metrics grouped by landing page URL. | `encoded_site_url`, `start_date`, `end_date` | |
-| `performance_by_country` | Metrics grouped by country (ISO 3166-1 alpha-3). | `encoded_site_url`, `start_date`, `end_date` | |
+| `performance_by_country` | Metrics grouped by country (lowercase ISO 3166-1 alpha-3). | `encoded_site_url`, `start_date`, `end_date` | |
 | `performance_by_device` | Metrics grouped by device type (MOBILE, DESKTOP, TABLET). | `encoded_site_url`, `start_date`, `end_date` | |
+| `performance_by_search_appearance` | Metrics grouped by Search appearance feature. | `encoded_site_url`, `start_date`, `end_date` | |
 
 ## Authentication
 
@@ -45,7 +47,7 @@ coral source lint sources/community/google_search_console/manifest.yaml
 
 Run test queries defined in the manifest:
 ```sh
-coral source test --file sources/community/google_search_console/manifest.yaml
+coral source test google_search_console
 ```
 
 ## Example Queries
@@ -56,6 +58,16 @@ Start by retrieving the `encoded_site_url` values, which are required for perfor
 ```sql
 SELECT site_url, encoded_site_url, permission_level
 FROM google_search_console.sites;
+```
+
+### List submitted sitemaps
+Inspect sitemap metadata for one property.
+
+```sql
+SELECT path, type, last_submitted, last_downloaded, warnings, errors
+FROM google_search_console.sitemaps
+WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
+LIMIT 20;
 ```
 
 ### Total search performance for a month
@@ -105,14 +117,35 @@ WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
   AND end_date = '2025-01-31';
 ```
 
+### Traffic by Search appearance
+Discover Search appearance feature values returned for a property.
+
+```sql
+SELECT search_appearance, clicks, impressions, ctr
+FROM google_search_console.performance_by_search_appearance
+WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
+  AND start_date = '2025-01-01'
+  AND end_date = '2025-01-31'
+LIMIT 50;
+```
+
 ## Notes
 
 * The `encoded_site_url` filter value must be URL-encoded (e.g., `https%3A%2F%2Fexample.com%2F` or `sc-domain%3Aexample.com`). You can discover the exact `encoded_site_url` string for a property by querying the `sites` table.
-* The API returns up to 25,000 rows per request. Pagination is handled automatically by Coral using the `startRow` offset mechanism.
+* The API returns up to 25,000 rows per request. This source requests at most one bounded page per SQL query because Search Console's `startRow` pagination value belongs in the JSON request body, while Coral's offset pagination currently emits offsets as query parameters. Use narrower date ranges or dimensions if more than 25,000 rows are needed.
 * The API may omit rows where data is zero (e.g., a date with no clicks or impressions).
 * Start and end dates must be provided in `YYYY-MM-DD` format.
+* Country dimension values are returned as lowercase three-letter ISO 3166-1 alpha-3 codes such as `usa` and `gbr`.
+
+## References
+
+* [Sites API](https://developers.google.com/webmaster-tools/v1/sites/list)
+* [Sitemaps API](https://developers.google.com/webmaster-tools/v1/sitemaps)
+* [Search Analytics API](https://developers.google.com/webmaster-tools/v1/searchanalytics/query)
+* [Search Console API usage limits](https://developers.google.com/webmaster-tools/limits)
 
 ## Limitations
 
-* Due to API constraints, querying multiple dimensions at once (e.g., `date` AND `query`) is not supported out of the box in this source structure, as each dimension requires a separate table definition.
+* This v1 intentionally exposes common one-dimension Search Analytics groupings. Multi-dimension requests such as date plus query are out of scope for this source structure.
+* URL Inspection uses a separate Search Console API base URL and is not included in this v1 source.
 * This source supports read-only operations. Modifying sitemaps or managing property verification is not supported.
