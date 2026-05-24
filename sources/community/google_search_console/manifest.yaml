@@ -72,7 +72,11 @@ tables:
       Start here to discover site URLs.
       `SELECT site_url, encoded_site_url, permission_level FROM google_search_console.sites`.
       The encoded_site_url values returned are URL-encoded and ready to use
-      directly as required filter values in performance tables.
+      directly as required filter values in performance tables. The manifest
+      derives common URL-prefix and `sc-domain:` encodings, but unusual
+      URL-prefix properties with query strings, fragments, spaces, or other
+      reserved characters should be copied from this table rather than
+      hand-authored.
     request:
       method: GET
       path: /sites
@@ -98,8 +102,9 @@ tables:
         type: Utf8
         nullable: false
         description: >-
-          URL-encoded property URL. Use this value for the encoded_site_url
-          filter in the performance tables.
+          URL-encoded property URL for common URL-prefix and sc-domain
+          properties. Use this value for the encoded_site_url filter in the
+          performance tables.
         expr:
           kind: replace
           expr:
@@ -255,7 +260,8 @@ tables:
     fetch_limit_default: 1
     guide: >
       Requires encoded_site_url, start_date, and end_date filters. The encoded_site_url
-      must match a value from google_search_console.sites exactly.
+      must match a value from google_search_console.sites exactly. The optional
+      `type` filter defaults to Google's `web` Search result type when omitted.
       `SELECT * FROM google_search_console.search_performance
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
       AND start_date = '2025-01-01' AND end_date = '2025-01-31'`.
@@ -266,6 +272,11 @@ tables:
         required: true
       - name: end_date
         required: true
+      - name: type
+        required: false
+        description: >
+          Search result type. Defaults to Google's web type when omitted.
+          Valid values include web, image, video, news, discover, and googleNews.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -278,6 +289,10 @@ tables:
             - endDate
           from: filter
           key: end_date
+        - path:
+            - type
+          from: filter
+          key: type
         - path:
             - rowLimit
           from: literal
@@ -312,6 +327,14 @@ tables:
         expr:
           kind: from_filter
           key: end_date
+      - name: type
+        type: Utf8
+        nullable: true
+        virtual: true
+        description: Search result type filter requested for this query.
+        expr:
+          kind: from_filter
+          key: type
       - name: clicks
         type: Int64
         nullable: true
@@ -352,7 +375,8 @@ tables:
       data are omitted by the API.
     fetch_limit_default: 1000
     guide: >
-      Requires encoded_site_url, start_date, and end_date filters.
+      Requires encoded_site_url, start_date, and end_date filters. The optional
+      `type` filter defaults to Google's `web` Search result type when omitted.
       `SELECT date, clicks, impressions, ctr, position
       FROM google_search_console.performance_by_date
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
@@ -364,6 +388,11 @@ tables:
         required: true
       - name: end_date
         required: true
+      - name: type
+        required: false
+        description: >
+          Search result type. Defaults to Google's web type when omitted.
+          Valid values include web, image, video, news, discover, and googleNews.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -377,6 +406,10 @@ tables:
           from: filter
           key: end_date
         - path:
+            - type
+          from: filter
+          key: type
+        - path:
             - dimensions
           from: literal
           value:
@@ -384,17 +417,12 @@ tables:
         - path:
             - rowLimit
           from: literal
-          value: 25000
+          value: 1000
     response:
       rows_path:
         - rows
     pagination:
       mode: none
-      page_size:
-        default: 25000
-        max: 25000
-        body_path:
-          - rowLimit
     columns:
       - name: encoded_site_url
         type: Utf8
@@ -420,6 +448,14 @@ tables:
         expr:
           kind: from_filter
           key: end_date
+      - name: type
+        type: Utf8
+        nullable: true
+        virtual: true
+        description: Search result type filter requested for this query.
+        expr:
+          kind: from_filter
+          key: type
       - name: date
         type: Utf8
         nullable: true
@@ -469,7 +505,8 @@ tables:
       position. Results are sorted by click count descending.
     fetch_limit_default: 1000
     guide: >
-      Requires encoded_site_url, start_date, and end_date filters.
+      Requires encoded_site_url, start_date, and end_date filters. The optional
+      `type` filter defaults to Google's `web` Search result type when omitted.
       `SELECT query, clicks, impressions, ctr, position
       FROM google_search_console.performance_by_query
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
@@ -482,6 +519,11 @@ tables:
         required: true
       - name: end_date
         required: true
+      - name: type
+        required: false
+        description: >
+          Search result type. Defaults to Google's web type when omitted.
+          Valid values include web, image, video, news, discover, and googleNews.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -495,6 +537,10 @@ tables:
           from: filter
           key: end_date
         - path:
+            - type
+          from: filter
+          key: type
+        - path:
             - dimensions
           from: literal
           value:
@@ -502,17 +548,12 @@ tables:
         - path:
             - rowLimit
           from: literal
-          value: 25000
+          value: 1000
     response:
       rows_path:
         - rows
     pagination:
       mode: none
-      page_size:
-        default: 25000
-        max: 25000
-        body_path:
-          - rowLimit
     columns:
       - name: encoded_site_url
         type: Utf8
@@ -538,6 +579,14 @@ tables:
         expr:
           kind: from_filter
           key: end_date
+      - name: type
+        type: Utf8
+        nullable: true
+        virtual: true
+        description: Search result type filter requested for this query.
+        expr:
+          kind: from_filter
+          key: type
       - name: query
         type: Utf8
         nullable: true
@@ -586,7 +635,8 @@ tables:
       represents one page's clicks, impressions, CTR, and average position.
     fetch_limit_default: 1000
     guide: >
-      Requires encoded_site_url, start_date, and end_date filters.
+      Requires encoded_site_url, start_date, and end_date filters. The optional
+      `type` filter defaults to Google's `web` Search result type when omitted.
       `SELECT page, clicks, impressions, ctr, position
       FROM google_search_console.performance_by_page
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
@@ -599,6 +649,11 @@ tables:
         required: true
       - name: end_date
         required: true
+      - name: type
+        required: false
+        description: >
+          Search result type. Defaults to Google's web type when omitted.
+          Valid values include web, image, video, news, discover, and googleNews.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -612,6 +667,10 @@ tables:
           from: filter
           key: end_date
         - path:
+            - type
+          from: filter
+          key: type
+        - path:
             - dimensions
           from: literal
           value:
@@ -619,17 +678,12 @@ tables:
         - path:
             - rowLimit
           from: literal
-          value: 25000
+          value: 1000
     response:
       rows_path:
         - rows
     pagination:
       mode: none
-      page_size:
-        default: 25000
-        max: 25000
-        body_path:
-          - rowLimit
     columns:
       - name: encoded_site_url
         type: Utf8
@@ -655,6 +709,14 @@ tables:
         expr:
           kind: from_filter
           key: end_date
+      - name: type
+        type: Utf8
+        nullable: true
+        virtual: true
+        description: Search result type filter requested for this query.
+        expr:
+          kind: from_filter
+          key: type
       - name: page
         type: Utf8
         nullable: true
@@ -704,7 +766,8 @@ tables:
       Countries use lowercase ISO 3166-1 alpha-3 codes (e.g. usa, gbr, deu).
     fetch_limit_default: 1000
     guide: >
-      Requires encoded_site_url, start_date, and end_date filters.
+      Requires encoded_site_url, start_date, and end_date filters. The optional
+      `type` filter defaults to Google's `web` Search result type when omitted.
       `SELECT country, clicks, impressions, ctr, position
       FROM google_search_console.performance_by_country
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
@@ -717,6 +780,11 @@ tables:
         required: true
       - name: end_date
         required: true
+      - name: type
+        required: false
+        description: >
+          Search result type. Defaults to Google's web type when omitted.
+          Valid values include web, image, video, news, discover, and googleNews.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -730,6 +798,10 @@ tables:
           from: filter
           key: end_date
         - path:
+            - type
+          from: filter
+          key: type
+        - path:
             - dimensions
           from: literal
           value:
@@ -737,17 +809,12 @@ tables:
         - path:
             - rowLimit
           from: literal
-          value: 25000
+          value: 1000
     response:
       rows_path:
         - rows
     pagination:
       mode: none
-      page_size:
-        default: 25000
-        max: 25000
-        body_path:
-          - rowLimit
     columns:
       - name: encoded_site_url
         type: Utf8
@@ -773,6 +840,14 @@ tables:
         expr:
           kind: from_filter
           key: end_date
+      - name: type
+        type: Utf8
+        nullable: true
+        virtual: true
+        description: Search result type filter requested for this query.
+        expr:
+          kind: from_filter
+          key: type
       - name: country
         type: Utf8
         nullable: true
@@ -822,7 +897,8 @@ tables:
       position. Device values are MOBILE, DESKTOP, or TABLET.
     fetch_limit_default: 1000
     guide: >
-      Requires encoded_site_url, start_date, and end_date filters.
+      Requires encoded_site_url, start_date, and end_date filters. The optional
+      `type` filter defaults to Google's `web` Search result type when omitted.
       `SELECT device, clicks, impressions, ctr, position
       FROM google_search_console.performance_by_device
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
@@ -834,6 +910,11 @@ tables:
         required: true
       - name: end_date
         required: true
+      - name: type
+        required: false
+        description: >
+          Search result type. Defaults to Google's web type when omitted.
+          Valid values include web, image, video, news, discover, and googleNews.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -847,6 +928,10 @@ tables:
           from: filter
           key: end_date
         - path:
+            - type
+          from: filter
+          key: type
+        - path:
             - dimensions
           from: literal
           value:
@@ -854,17 +939,12 @@ tables:
         - path:
             - rowLimit
           from: literal
-          value: 25000
+          value: 1000
     response:
       rows_path:
         - rows
     pagination:
       mode: none
-      page_size:
-        default: 25000
-        max: 25000
-        body_path:
-          - rowLimit
     columns:
       - name: encoded_site_url
         type: Utf8
@@ -890,6 +970,14 @@ tables:
         expr:
           kind: from_filter
           key: end_date
+      - name: type
+        type: Utf8
+        nullable: true
+        virtual: true
+        description: Search result type filter requested for this query.
+        expr:
+          kind: from_filter
+          key: type
       - name: device
         type: Utf8
         nullable: true
@@ -940,7 +1028,8 @@ tables:
       feature.
     fetch_limit_default: 1000
     guide: >
-      Requires encoded_site_url, start_date, and end_date filters.
+      Requires encoded_site_url, start_date, and end_date filters. The optional
+      `type` filter defaults to Google's `web` Search result type when omitted.
       `SELECT search_appearance, clicks, impressions, ctr, position
       FROM google_search_console.performance_by_search_appearance
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
@@ -953,6 +1042,11 @@ tables:
         required: true
       - name: end_date
         required: true
+      - name: type
+        required: false
+        description: >
+          Search result type. Defaults to Google's web type when omitted.
+          Valid values include web, image, video, news, discover, and googleNews.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -966,6 +1060,10 @@ tables:
           from: filter
           key: end_date
         - path:
+            - type
+          from: filter
+          key: type
+        - path:
             - dimensions
           from: literal
           value:
@@ -973,17 +1071,12 @@ tables:
         - path:
             - rowLimit
           from: literal
-          value: 25000
+          value: 1000
     response:
       rows_path:
         - rows
     pagination:
       mode: none
-      page_size:
-        default: 25000
-        max: 25000
-        body_path:
-          - rowLimit
     columns:
       - name: encoded_site_url
         type: Utf8
@@ -1009,6 +1102,14 @@ tables:
         expr:
           kind: from_filter
           key: end_date
+      - name: type
+        type: Utf8
+        nullable: true
+        virtual: true
+        description: Search result type filter requested for this query.
+        expr:
+          kind: from_filter
+          key: type
       - name: search_appearance
         type: Utf8
         nullable: true

@@ -5,7 +5,13 @@
 **Tables:** 9
 **Base URL:** `https://www.googleapis.com/webmasters/v3`
 
-Query Google Search Console for verified properties, submitted sitemaps, and search performance metrics (clicks, impressions, CTR, position) filtered by date range and grouped by dimensions such as date, query, page, country, device, or Search appearance. The performance tables require an `encoded_site_url`, `start_date`, and `end_date` filter, making them useful for combining with other analytics sources or extracting specific SEO snapshots.
+Query Google Search Console for verified properties, submitted sitemaps, and
+search performance metrics (clicks, impressions, CTR, position) filtered by
+date range and grouped by dimensions such as date, query, page, country,
+device, or Search appearance. The performance tables require an
+`encoded_site_url`, `start_date`, and `end_date` filter, making them useful
+for combining with other analytics sources or extracting specific SEO
+snapshots.
 
 ## Tables
 
@@ -13,17 +19,18 @@ Query Google Search Console for verified properties, submitted sitemaps, and sea
 | :--- | :--- | :--- | :--- |
 | `sites` | Lists all verified properties accessible to the user. | | |
 | `sitemaps` | Lists submitted sitemap entries for a property. | `encoded_site_url` | `sitemap_index` |
-| `search_performance` | Aggregate metrics without dimension grouping. | `encoded_site_url`, `start_date`, `end_date` | |
-| `performance_by_date` | Metrics grouped by date. | `encoded_site_url`, `start_date`, `end_date` | |
-| `performance_by_query` | Metrics grouped by search query (keyword). | `encoded_site_url`, `start_date`, `end_date` | |
-| `performance_by_page` | Metrics grouped by landing page URL. | `encoded_site_url`, `start_date`, `end_date` | |
-| `performance_by_country` | Metrics grouped by country (lowercase ISO 3166-1 alpha-3). | `encoded_site_url`, `start_date`, `end_date` | |
-| `performance_by_device` | Metrics grouped by device type (MOBILE, DESKTOP, TABLET). | `encoded_site_url`, `start_date`, `end_date` | |
-| `performance_by_search_appearance` | Metrics grouped by Search appearance feature. | `encoded_site_url`, `start_date`, `end_date` | |
+| `search_performance` | Aggregate metrics without dimension grouping. | `encoded_site_url`, `start_date`, `end_date` | `type` |
+| `performance_by_date` | Metrics grouped by date. | `encoded_site_url`, `start_date`, `end_date` | `type` |
+| `performance_by_query` | Metrics grouped by search query (keyword). | `encoded_site_url`, `start_date`, `end_date` | `type` |
+| `performance_by_page` | Metrics grouped by landing page URL. | `encoded_site_url`, `start_date`, `end_date` | `type` |
+| `performance_by_country` | Metrics grouped by country (lowercase ISO 3166-1 alpha-3). | `encoded_site_url`, `start_date`, `end_date` | `type` |
+| `performance_by_device` | Metrics grouped by device type (MOBILE, DESKTOP, TABLET). | `encoded_site_url`, `start_date`, `end_date` | `type` |
+| `performance_by_search_appearance` | Metrics grouped by Search appearance feature. | `encoded_site_url`, `start_date`, `end_date` | `type` |
 
 ## Authentication
 
-Google Search Console requires an OAuth 2.0 access token with the `https://www.googleapis.com/auth/webmasters.readonly` scope. 
+Google Search Console requires an OAuth 2.0 access token with the
+`https://www.googleapis.com/auth/webmasters.readonly` scope.
 
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
 2. Create a new project or select an existing one.
@@ -78,7 +85,8 @@ SELECT clicks, impressions, ctr, position
 FROM google_search_console.search_performance
 WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
   AND start_date = '2025-01-01'
-  AND end_date = '2025-01-31';
+  AND end_date = '2025-01-31'
+  AND type = 'web';
 ```
 
 ### Top 50 search queries by clicks
@@ -131,11 +139,31 @@ LIMIT 50;
 
 ## Notes
 
-* The `encoded_site_url` filter value must be URL-encoded (e.g., `https%3A%2F%2Fexample.com%2F` or `sc-domain%3Aexample.com`). You can discover the exact `encoded_site_url` string for a property by querying the `sites` table.
-* The API returns up to 25,000 rows per request. This source requests at most one bounded page per SQL query because Search Console's `startRow` pagination value belongs in the JSON request body, while Coral's offset pagination currently emits offsets as query parameters. Use narrower date ranges or dimensions if more than 25,000 rows are needed.
+* The `encoded_site_url` filter value must be URL-encoded (e.g.,
+  `https%3A%2F%2Fexample.com%2F` or `sc-domain%3Aexample.com`). Discover and
+  copy the exact `encoded_site_url` string from the `sites` table. The manifest
+  derives common URL-prefix and `sc-domain:` encodings, but unusual URL-prefix
+  properties with query strings, fragments, spaces, or other reserved
+  characters should be treated carefully.
+* The optional Search Analytics `type` filter defaults to Google's `web` result
+  type when omitted. Valid values include `web`, `image`, `video`, `news`,
+  `discover`, and `googleNews`.
+* The Search Analytics API returns up to 25,000 rows per request. This source
+  uses a conservative provider `rowLimit` of 1,000 rows for dimension tables
+  because Search Console's `startRow` pagination value belongs in the JSON
+  request body, while Coral's offset pagination currently emits offsets as
+  query parameters. Use narrower date ranges or dimensions if more than 1,000
+  rows are needed.
 * The API may omit rows where data is zero (e.g., a date with no clicks or impressions).
 * Start and end dates must be provided in `YYYY-MM-DD` format.
 * Country dimension values are returned as lowercase three-letter ISO 3166-1 alpha-3 codes such as `usa` and `gbr`.
+
+## Rate limits
+
+Search Analytics has load limits as well as QPS/QPM quotas. Google calls out
+page/query grouping, long date ranges, and repeated re-queries as higher-load
+patterns. Keep date ranges narrow for expensive dimensions such as `query` and
+`page`, and wait before retrying if Google returns quota errors.
 
 ## References
 
