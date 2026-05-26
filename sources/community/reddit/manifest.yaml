@@ -381,7 +381,6 @@ tables:
     filters:
       - name: q
         required: true
-        mode: search
       - name: subreddit
         required: false
       - name: sort
@@ -498,7 +497,7 @@ tables:
           kind: format_timestamp
           input: seconds
           expr: {kind: path, path: [data, created_utc]}
-      - name: query
+      - name: q
         type: Utf8
         nullable: true
         description: Echoes the search query.
