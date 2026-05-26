@@ -1,0 +1,806 @@
+name: reddit
+version: 0.1.0
+dsl_version: 3
+backend: http
+description: >-
+  Query public Reddit posts, comments, user activity, and keyword search via
+  Reddit JSON endpoints. This source is read-only and does not require
+  authentication.
+base_url: https://www.reddit.com
+
+request_headers:
+  - name: Accept
+    from: literal
+    value: application/json
+  - name: User-Agent
+    from: literal
+    value: coral-reddit-source/0.1
+
+test_queries:
+  - SELECT title, author, score FROM reddit.subreddit_hot WHERE subreddit = 'redditdev' LIMIT 1
+  - SELECT title, subreddit, author FROM reddit.search_posts WHERE q = 'rust' LIMIT 1
+
+tables:
+  - name: subreddit_hot
+    description: Hot posts from a public subreddit.
+    guide: |
+      Use this table to list currently hot posts from a subreddit. The
+      `subreddit` filter is required and should not include the `r/` prefix.
+      Results come from Reddit's public JSON listing endpoint.
+    fetch_limit_default: 25
+    filters:
+      - name: subreddit
+        required: true
+    request:
+      method: GET
+      path: /r/{{filter.subreddit}}/hot.json
+    response:
+      rows_path:
+        - data
+        - children
+    pagination:
+      mode: cursor_query
+      page_size:
+        default: 25
+        max: 100
+        query_param: limit
+      cursor_param: after
+      response_cursor_path:
+        - data
+        - after
+      max_pages: 10
+    columns:
+      - name: id
+        type: Utf8
+        nullable: false
+        description: Reddit post ID without the `t3_` prefix.
+        expr: {kind: path, path: [data, id]}
+      - name: fullname
+        type: Utf8
+        nullable: true
+        description: Reddit fullname, usually prefixed with `t3_`.
+        expr: {kind: path, path: [data, name]}
+      - name: title
+        type: Utf8
+        nullable: true
+        description: Post title.
+        expr: {kind: path, path: [data, title]}
+      - name: subreddit
+        type: Utf8
+        nullable: true
+        description: Subreddit name without the `r/` prefix.
+        expr: {kind: path, path: [data, subreddit]}
+      - name: author
+        type: Utf8
+        nullable: true
+        description: Reddit username of the post author.
+        expr: {kind: path, path: [data, author]}
+      - name: score
+        type: Int64
+        nullable: true
+        description: Current post score.
+        expr: {kind: path, path: [data, score]}
+      - name: upvote_ratio
+        type: Float64
+        nullable: true
+        description: Reddit upvote ratio for the post.
+        expr: {kind: path, path: [data, upvote_ratio]}
+      - name: num_comments
+        type: Int64
+        nullable: true
+        description: Number of comments on the post.
+        expr: {kind: path, path: [data, num_comments]}
+      - name: permalink
+        type: Utf8
+        nullable: true
+        description: Relative Reddit permalink.
+        expr: {kind: path, path: [data, permalink]}
+      - name: url
+        type: Utf8
+        nullable: true
+        description: Linked URL or Reddit post URL.
+        expr: {kind: path, path: [data, url]}
+      - name: selftext
+        type: Utf8
+        nullable: true
+        description: Text body for self posts.
+        expr: {kind: path, path: [data, selftext]}
+      - name: created_utc
+        type: Timestamp
+        nullable: true
+        description: Post creation time as UTC timestamp.
+        expr:
+          kind: format_timestamp
+          input: seconds
+          expr: {kind: path, path: [data, created_utc]}
+      - name: over_18
+        type: Boolean
+        nullable: true
+        description: Whether Reddit marks the post as over-18 content.
+        expr: {kind: path, path: [data, over_18]}
+      - name: stickied
+        type: Boolean
+        nullable: true
+        description: Whether the post is stickied.
+        expr: {kind: path, path: [data, stickied]}
+      - name: locked
+        type: Boolean
+        nullable: true
+        description: Whether comments are locked.
+        expr: {kind: path, path: [data, locked]}
+      - name: raw
+        type: Json
+        nullable: true
+        description: Raw Reddit listing child JSON.
+        expr: {kind: current_row}
+
+  - name: subreddit_new
+    description: Newest posts from a public subreddit.
+    guide: |
+      Use this table to list newest posts from a subreddit. The `subreddit`
+      filter is required and should not include the `r/` prefix.
+    fetch_limit_default: 25
+    filters:
+      - name: subreddit
+        required: true
+    request:
+      method: GET
+      path: /r/{{filter.subreddit}}/new.json
+    response:
+      rows_path:
+        - data
+        - children
+    pagination:
+      mode: cursor_query
+      page_size:
+        default: 25
+        max: 100
+        query_param: limit
+      cursor_param: after
+      response_cursor_path:
+        - data
+        - after
+      max_pages: 10
+    columns:
+      - name: id
+        type: Utf8
+        nullable: false
+        description: Reddit post ID without the `t3_` prefix.
+        expr: {kind: path, path: [data, id]}
+      - name: fullname
+        type: Utf8
+        nullable: true
+        description: Reddit fullname, usually prefixed with `t3_`.
+        expr: {kind: path, path: [data, name]}
+      - name: title
+        type: Utf8
+        nullable: true
+        description: Post title.
+        expr: {kind: path, path: [data, title]}
+      - name: subreddit
+        type: Utf8
+        nullable: true
+        description: Subreddit name without the `r/` prefix.
+        expr: {kind: path, path: [data, subreddit]}
+      - name: author
+        type: Utf8
+        nullable: true
+        description: Reddit username of the post author.
+        expr: {kind: path, path: [data, author]}
+      - name: score
+        type: Int64
+        nullable: true
+        description: Current post score.
+        expr: {kind: path, path: [data, score]}
+      - name: upvote_ratio
+        type: Float64
+        nullable: true
+        description: Reddit upvote ratio for the post.
+        expr: {kind: path, path: [data, upvote_ratio]}
+      - name: num_comments
+        type: Int64
+        nullable: true
+        description: Number of comments on the post.
+        expr: {kind: path, path: [data, num_comments]}
+      - name: permalink
+        type: Utf8
+        nullable: true
+        description: Relative Reddit permalink.
+        expr: {kind: path, path: [data, permalink]}
+      - name: url
+        type: Utf8
+        nullable: true
+        description: Linked URL or Reddit post URL.
+        expr: {kind: path, path: [data, url]}
+      - name: selftext
+        type: Utf8
+        nullable: true
+        description: Text body for self posts.
+        expr: {kind: path, path: [data, selftext]}
+      - name: created_utc
+        type: Timestamp
+        nullable: true
+        description: Post creation time as UTC timestamp.
+        expr:
+          kind: format_timestamp
+          input: seconds
+          expr: {kind: path, path: [data, created_utc]}
+      - name: over_18
+        type: Boolean
+        nullable: true
+        description: Whether Reddit marks the post as over-18 content.
+        expr: {kind: path, path: [data, over_18]}
+      - name: stickied
+        type: Boolean
+        nullable: true
+        description: Whether the post is stickied.
+        expr: {kind: path, path: [data, stickied]}
+      - name: locked
+        type: Boolean
+        nullable: true
+        description: Whether comments are locked.
+        expr: {kind: path, path: [data, locked]}
+      - name: raw
+        type: Json
+        nullable: true
+        description: Raw Reddit listing child JSON.
+        expr: {kind: current_row}
+
+  - name: subreddit_top
+    description: Top posts from a public subreddit.
+    guide: |
+      Use this table to list top posts from a subreddit. The `subreddit`
+      filter is required. Use the optional `t` filter for Reddit's time window,
+      such as `day`, `week`, `month`, `year`, or `all`.
+    fetch_limit_default: 25
+    filters:
+      - name: subreddit
+        required: true
+      - name: t
+        required: false
+    request:
+      method: GET
+      path: /r/{{filter.subreddit}}/top.json
+      query:
+        - name: t
+          from: filter
+          key: t
+    response:
+      rows_path:
+        - data
+        - children
+    pagination:
+      mode: cursor_query
+      page_size:
+        default: 25
+        max: 100
+        query_param: limit
+      cursor_param: after
+      response_cursor_path:
+        - data
+        - after
+      max_pages: 10
+    columns:
+      - name: id
+        type: Utf8
+        nullable: false
+        description: Reddit post ID without the `t3_` prefix.
+        expr: {kind: path, path: [data, id]}
+      - name: fullname
+        type: Utf8
+        nullable: true
+        description: Reddit fullname, usually prefixed with `t3_`.
+        expr: {kind: path, path: [data, name]}
+      - name: title
+        type: Utf8
+        nullable: true
+        description: Post title.
+        expr: {kind: path, path: [data, title]}
+      - name: subreddit
+        type: Utf8
+        nullable: true
+        description: Subreddit name without the `r/` prefix.
+        expr: {kind: path, path: [data, subreddit]}
+      - name: author
+        type: Utf8
+        nullable: true
+        description: Reddit username of the post author.
+        expr: {kind: path, path: [data, author]}
+      - name: score
+        type: Int64
+        nullable: true
+        description: Current post score.
+        expr: {kind: path, path: [data, score]}
+      - name: upvote_ratio
+        type: Float64
+        nullable: true
+        description: Reddit upvote ratio for the post.
+        expr: {kind: path, path: [data, upvote_ratio]}
+      - name: num_comments
+        type: Int64
+        nullable: true
+        description: Number of comments on the post.
+        expr: {kind: path, path: [data, num_comments]}
+      - name: permalink
+        type: Utf8
+        nullable: true
+        description: Relative Reddit permalink.
+        expr: {kind: path, path: [data, permalink]}
+      - name: url
+        type: Utf8
+        nullable: true
+        description: Linked URL or Reddit post URL.
+        expr: {kind: path, path: [data, url]}
+      - name: selftext
+        type: Utf8
+        nullable: true
+        description: Text body for self posts.
+        expr: {kind: path, path: [data, selftext]}
+      - name: created_utc
+        type: Timestamp
+        nullable: true
+        description: Post creation time as UTC timestamp.
+        expr:
+          kind: format_timestamp
+          input: seconds
+          expr: {kind: path, path: [data, created_utc]}
+      - name: over_18
+        type: Boolean
+        nullable: true
+        description: Whether Reddit marks the post as over-18 content.
+        expr: {kind: path, path: [data, over_18]}
+      - name: stickied
+        type: Boolean
+        nullable: true
+        description: Whether the post is stickied.
+        expr: {kind: path, path: [data, stickied]}
+      - name: locked
+        type: Boolean
+        nullable: true
+        description: Whether comments are locked.
+        expr: {kind: path, path: [data, locked]}
+      - name: t
+        type: Utf8
+        nullable: true
+        description: Echoes the requested top-post time window.
+        expr: {kind: from_filter, key: t}
+      - name: raw
+        type: Json
+        nullable: true
+        description: Raw Reddit listing child JSON.
+        expr: {kind: current_row}
+
+  - name: search_posts
+    description: Search public Reddit posts.
+    guide: |
+      Search Reddit posts globally, or provide `subreddit` to search inside a
+      specific subreddit. The `q` filter is required. Optional `sort` values
+      include `relevance`, `hot`, `top`, `new`, and `comments`; optional `t`
+      values include `hour`, `day`, `week`, `month`, `year`, and `all`.
+    fetch_limit_default: 25
+    filters:
+      - name: q
+        required: true
+        mode: search
+      - name: subreddit
+        required: false
+      - name: sort
+        required: false
+      - name: t
+        required: false
+    request:
+      method: GET
+      path: /search.json
+      query:
+        - name: q
+          from: filter
+          key: q
+        - name: sort
+          from: filter
+          key: sort
+        - name: t
+          from: filter
+          key: t
+    requests:
+      - when_filters:
+          - subreddit
+        method: GET
+        path: /r/{{filter.subreddit}}/search.json
+        query:
+          - name: q
+            from: filter
+            key: q
+          - name: sort
+            from: filter
+            key: sort
+          - name: t
+            from: filter
+            key: t
+          - name: restrict_sr
+            from: literal
+            value: "1"
+    response:
+      rows_path:
+        - data
+        - children
+    pagination:
+      mode: cursor_query
+      page_size:
+        default: 25
+        max: 100
+        query_param: limit
+      cursor_param: after
+      response_cursor_path:
+        - data
+        - after
+      max_pages: 10
+    columns:
+      - name: id
+        type: Utf8
+        nullable: false
+        description: Reddit post ID without the `t3_` prefix.
+        expr: {kind: path, path: [data, id]}
+      - name: fullname
+        type: Utf8
+        nullable: true
+        description: Reddit fullname, usually prefixed with `t3_`.
+        expr: {kind: path, path: [data, name]}
+      - name: title
+        type: Utf8
+        nullable: true
+        description: Post title.
+        expr: {kind: path, path: [data, title]}
+      - name: subreddit
+        type: Utf8
+        nullable: true
+        description: Subreddit name without the `r/` prefix.
+        expr: {kind: path, path: [data, subreddit]}
+      - name: author
+        type: Utf8
+        nullable: true
+        description: Reddit username of the post author.
+        expr: {kind: path, path: [data, author]}
+      - name: score
+        type: Int64
+        nullable: true
+        description: Current post score.
+        expr: {kind: path, path: [data, score]}
+      - name: upvote_ratio
+        type: Float64
+        nullable: true
+        description: Reddit upvote ratio for the post.
+        expr: {kind: path, path: [data, upvote_ratio]}
+      - name: num_comments
+        type: Int64
+        nullable: true
+        description: Number of comments on the post.
+        expr: {kind: path, path: [data, num_comments]}
+      - name: permalink
+        type: Utf8
+        nullable: true
+        description: Relative Reddit permalink.
+        expr: {kind: path, path: [data, permalink]}
+      - name: url
+        type: Utf8
+        nullable: true
+        description: Linked URL or Reddit post URL.
+        expr: {kind: path, path: [data, url]}
+      - name: selftext
+        type: Utf8
+        nullable: true
+        description: Text body for self posts.
+        expr: {kind: path, path: [data, selftext]}
+      - name: created_utc
+        type: Timestamp
+        nullable: true
+        description: Post creation time as UTC timestamp.
+        expr:
+          kind: format_timestamp
+          input: seconds
+          expr: {kind: path, path: [data, created_utc]}
+      - name: query
+        type: Utf8
+        nullable: true
+        description: Echoes the search query.
+        expr: {kind: from_filter, key: q}
+      - name: subreddit_filter
+        type: Utf8
+        nullable: true
+        description: Echoes the optional subreddit filter.
+        expr: {kind: from_filter, key: subreddit}
+      - name: sort
+        type: Utf8
+        nullable: true
+        description: Echoes the requested Reddit search sort.
+        expr: {kind: from_filter, key: sort}
+      - name: t
+        type: Utf8
+        nullable: true
+        description: Echoes the requested search time window.
+        expr: {kind: from_filter, key: t}
+      - name: raw
+        type: Json
+        nullable: true
+        description: Raw Reddit listing child JSON.
+        expr: {kind: current_row}
+
+  - name: user_posts
+    description: Public posts submitted by a Reddit user.
+    guide: |
+      Use this table to list public posts submitted by a Reddit user. The
+      `username` filter is required and should not include the `u/` prefix.
+    fetch_limit_default: 25
+    filters:
+      - name: username
+        required: true
+    request:
+      method: GET
+      path: /user/{{filter.username}}/submitted.json
+    response:
+      rows_path:
+        - data
+        - children
+    pagination:
+      mode: cursor_query
+      page_size:
+        default: 25
+        max: 100
+        query_param: limit
+      cursor_param: after
+      response_cursor_path:
+        - data
+        - after
+      max_pages: 10
+    columns:
+      - name: id
+        type: Utf8
+        nullable: false
+        description: Reddit post ID without the `t3_` prefix.
+        expr: {kind: path, path: [data, id]}
+      - name: fullname
+        type: Utf8
+        nullable: true
+        description: Reddit fullname, usually prefixed with `t3_`.
+        expr: {kind: path, path: [data, name]}
+      - name: title
+        type: Utf8
+        nullable: true
+        description: Post title.
+        expr: {kind: path, path: [data, title]}
+      - name: subreddit
+        type: Utf8
+        nullable: true
+        description: Subreddit name without the `r/` prefix.
+        expr: {kind: path, path: [data, subreddit]}
+      - name: author
+        type: Utf8
+        nullable: true
+        description: Reddit username of the post author.
+        expr: {kind: path, path: [data, author]}
+      - name: score
+        type: Int64
+        nullable: true
+        description: Current post score.
+        expr: {kind: path, path: [data, score]}
+      - name: num_comments
+        type: Int64
+        nullable: true
+        description: Number of comments on the post.
+        expr: {kind: path, path: [data, num_comments]}
+      - name: permalink
+        type: Utf8
+        nullable: true
+        description: Relative Reddit permalink.
+        expr: {kind: path, path: [data, permalink]}
+      - name: url
+        type: Utf8
+        nullable: true
+        description: Linked URL or Reddit post URL.
+        expr: {kind: path, path: [data, url]}
+      - name: selftext
+        type: Utf8
+        nullable: true
+        description: Text body for self posts.
+        expr: {kind: path, path: [data, selftext]}
+      - name: created_utc
+        type: Timestamp
+        nullable: true
+        description: Post creation time as UTC timestamp.
+        expr:
+          kind: format_timestamp
+          input: seconds
+          expr: {kind: path, path: [data, created_utc]}
+      - name: username
+        type: Utf8
+        nullable: true
+        description: Echoes the requested username.
+        expr: {kind: from_filter, key: username}
+      - name: raw
+        type: Json
+        nullable: true
+        description: Raw Reddit listing child JSON.
+        expr: {kind: current_row}
+
+  - name: user_comments
+    description: Public comments written by a Reddit user.
+    guide: |
+      Use this table to list public comments written by a Reddit user. The
+      `username` filter is required and should not include the `u/` prefix.
+    fetch_limit_default: 25
+    filters:
+      - name: username
+        required: true
+    request:
+      method: GET
+      path: /user/{{filter.username}}/comments.json
+    response:
+      rows_path:
+        - data
+        - children
+    pagination:
+      mode: cursor_query
+      page_size:
+        default: 25
+        max: 100
+        query_param: limit
+      cursor_param: after
+      response_cursor_path:
+        - data
+        - after
+      max_pages: 10
+    columns:
+      - name: id
+        type: Utf8
+        nullable: false
+        description: Reddit comment ID without the `t1_` prefix.
+        expr: {kind: path, path: [data, id]}
+      - name: fullname
+        type: Utf8
+        nullable: true
+        description: Reddit fullname, usually prefixed with `t1_`.
+        expr: {kind: path, path: [data, name]}
+      - name: body
+        type: Utf8
+        nullable: true
+        description: Comment body.
+        expr: {kind: path, path: [data, body]}
+      - name: subreddit
+        type: Utf8
+        nullable: true
+        description: Subreddit name without the `r/` prefix.
+        expr: {kind: path, path: [data, subreddit]}
+      - name: author
+        type: Utf8
+        nullable: true
+        description: Reddit username of the comment author.
+        expr: {kind: path, path: [data, author]}
+      - name: score
+        type: Int64
+        nullable: true
+        description: Current comment score.
+        expr: {kind: path, path: [data, score]}
+      - name: link_id
+        type: Utf8
+        nullable: true
+        description: Parent post fullname, usually prefixed with `t3_`.
+        expr: {kind: path, path: [data, link_id]}
+      - name: parent_id
+        type: Utf8
+        nullable: true
+        description: Parent thing fullname.
+        expr: {kind: path, path: [data, parent_id]}
+      - name: permalink
+        type: Utf8
+        nullable: true
+        description: Relative Reddit permalink for the comment.
+        expr: {kind: path, path: [data, permalink]}
+      - name: created_utc
+        type: Timestamp
+        nullable: true
+        description: Comment creation time as UTC timestamp.
+        expr:
+          kind: format_timestamp
+          input: seconds
+          expr: {kind: path, path: [data, created_utc]}
+      - name: username
+        type: Utf8
+        nullable: true
+        description: Echoes the requested username.
+        expr: {kind: from_filter, key: username}
+      - name: raw
+        type: Json
+        nullable: true
+        description: Raw Reddit listing child JSON.
+        expr: {kind: current_row}
+
+  - name: post_comments
+    description: Top-level comments for a Reddit post.
+    guide: |
+      Use this table to list top-level comments for a post. Provide the
+      subreddit and post ID. The post ID should be the short ID from a Reddit
+      post URL, without the `t3_` prefix.
+    fetch_limit_default: 100
+    filters:
+      - name: subreddit
+        required: true
+      - name: post_id
+        required: true
+    request:
+      method: GET
+      path: /r/{{filter.subreddit}}/comments/{{filter.post_id}}.json
+    response:
+      rows_path:
+        - "1"
+        - data
+        - children
+    pagination:
+      mode: none
+    columns:
+      - name: id
+        type: Utf8
+        nullable: true
+        description: Reddit comment ID without the `t1_` prefix.
+        expr: {kind: path, path: [data, id]}
+      - name: fullname
+        type: Utf8
+        nullable: true
+        description: Reddit fullname, usually prefixed with `t1_`.
+        expr: {kind: path, path: [data, name]}
+      - name: kind
+        type: Utf8
+        nullable: true
+        description: Reddit thing kind, such as `t1` for comments or `more`.
+        expr: {kind: path, path: [kind]}
+      - name: body
+        type: Utf8
+        nullable: true
+        description: Comment body. Null for `more` placeholders.
+        expr: {kind: path, path: [data, body]}
+      - name: author
+        type: Utf8
+        nullable: true
+        description: Reddit username of the comment author.
+        expr: {kind: path, path: [data, author]}
+      - name: score
+        type: Int64
+        nullable: true
+        description: Current comment score.
+        expr: {kind: path, path: [data, score]}
+      - name: parent_id
+        type: Utf8
+        nullable: true
+        description: Parent thing fullname.
+        expr: {kind: path, path: [data, parent_id]}
+      - name: permalink
+        type: Utf8
+        nullable: true
+        description: Relative Reddit permalink for the comment.
+        expr: {kind: path, path: [data, permalink]}
+      - name: created_utc
+        type: Timestamp
+        nullable: true
+        description: Comment creation time as UTC timestamp.
+        expr:
+          kind: format_timestamp
+          input: seconds
+          expr: {kind: path, path: [data, created_utc]}
+      - name: replies
+        type: Json
+        nullable: true
+        description: Nested replies object, when present.
+        expr: {kind: path, path: [data, replies]}
+      - name: subreddit
+        type: Utf8
+        nullable: true
+        description: Echoes the requested subreddit.
+        expr: {kind: from_filter, key: subreddit}
+      - name: post_id
+        type: Utf8
+        nullable: true
+        description: Echoes the requested post ID.
+        expr: {kind: from_filter, key: post_id}
+      - name: raw
+        type: Json
+        nullable: true
+        description: Raw Reddit comment listing child JSON.
+        expr: {kind: current_row}
