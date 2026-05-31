@@ -89,8 +89,8 @@ WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
   AND type = 'web';
 ```
 
-### Top 50 search queries by clicks
-Find the keywords driving the most traffic.
+### Top 50 web search queries by clicks
+Find the Google Search keywords driving the most traffic.
 
 ```sql
 SELECT query, clicks, impressions, position
@@ -98,6 +98,7 @@ FROM google_search_console.performance_by_query
 WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
   AND start_date = '2025-01-01'
   AND end_date = '2025-01-31'
+  AND type = 'web'
 ORDER BY clicks DESC
 LIMIT 50;
 ```
@@ -140,14 +141,20 @@ LIMIT 50;
 ## Notes
 
 * The `encoded_site_url` filter value must be URL-encoded (e.g.,
-  `https%3A%2F%2Fexample.com%2F` or `sc-domain%3Aexample.com`). Discover and
-  copy the exact `encoded_site_url` string from the `sites` table. The manifest
-  derives common URL-prefix and `sc-domain:` encodings, but unusual URL-prefix
-  properties with query strings, fragments, spaces, or other reserved
-  characters should be treated carefully.
+  `https%3A%2F%2Fexample.com%2F` or `sc-domain%3Aexample.com`). The
+  `sites.encoded_site_url` column is a convenience value for common
+  `https://.../` and `sc-domain:...` properties; source-spec expressions only
+  escape `/` and `:` here. Manually percent-encode or copy-check unusual
+  URL-prefix properties with path segments, query strings, fragments, spaces,
+  or other reserved characters before using them in filters.
 * The optional Search Analytics `type` filter defaults to Google's `web` result
   type when omitted. Valid values include `web`, `image`, `video`, `news`,
-  `discover`, and `googleNews`.
+  `discover`, and `googleNews`, but Google does not support every dimension or
+  metric for every type. In particular, query and position-oriented workflows
+  should use Search result types such as `web`, `image`, `video`, or `news`;
+  `discover` and `googleNews` are safest for aggregate/date-style clicks,
+  impressions, and CTR checks. Unsupported type/dimension combinations return
+  Google API errors.
 * The Search Analytics API returns up to 25,000 rows per request. This source
   uses a conservative provider `rowLimit` of 1,000 rows for dimension tables
   because Search Console's `startRow` pagination value belongs in the JSON

@@ -71,12 +71,11 @@ tables:
     guide: >
       Start here to discover site URLs.
       `SELECT site_url, encoded_site_url, permission_level FROM google_search_console.sites`.
-      The encoded_site_url values returned are URL-encoded and ready to use
-      directly as required filter values in performance tables. The manifest
-      derives common URL-prefix and `sc-domain:` encodings, but unusual
-      URL-prefix properties with query strings, fragments, spaces, or other
-      reserved characters should be copied from this table rather than
-      hand-authored.
+      The encoded_site_url values returned are convenience encodings for common
+      URL-prefix and `sc-domain:` properties. Source-spec expressions only
+      escape `/` and `:` here, so unusual URL-prefix properties with path
+      segments, query strings, fragments, spaces, or other reserved characters
+      should be manually percent-encoded or copy-checked before use.
     request:
       method: GET
       path: /sites
@@ -102,9 +101,10 @@ tables:
         type: Utf8
         nullable: false
         description: >-
-          URL-encoded property URL for common URL-prefix and sc-domain
-          properties. Use this value for the encoded_site_url filter in the
-          performance tables.
+          Convenience encoded property URL for common URL-prefix and sc-domain
+          properties. This column escapes / and : only; manually percent-encode
+          or copy-check unusual URL-prefix properties before using them in
+          performance table filters.
         expr:
           kind: replace
           expr:
@@ -254,14 +254,16 @@ tables:
 
   - name: search_performance
     description: >
-      Aggregate search performance metrics (clicks, impressions, CTR,
-      position) for a site within a date range, without dimension grouping.
-      Returns a single row with totals.
+      Aggregate Search Analytics metrics (clicks, impressions, CTR, and
+      position when supported) for a site within a date range, without
+      dimension grouping. Returns a single row with totals.
     fetch_limit_default: 1
     guide: >
       Requires encoded_site_url, start_date, and end_date filters. The encoded_site_url
-      must match a value from google_search_console.sites exactly. The optional
+      must match a Search Console site URL path encoding exactly. The optional
       `type` filter defaults to Google's `web` Search result type when omitted.
+      For discover and googleNews, prefer clicks, impressions, and CTR; Google
+      does not expose the same position surface for every result type.
       `SELECT * FROM google_search_console.search_performance
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
       AND start_date = '2025-01-01' AND end_date = '2025-01-31'`.
@@ -275,8 +277,9 @@ tables:
       - name: type
         required: false
         description: >
-          Search result type. Defaults to Google's web type when omitted.
-          Valid values include web, image, video, news, discover, and googleNews.
+          Search Analytics result type. Defaults to web when omitted. Valid
+          values include web, image, video, news, discover, and googleNews;
+          Google may reject unsupported type, dimension, and metric combinations.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -362,7 +365,7 @@ tables:
       - name: position
         type: Float64
         nullable: true
-        description: Average position in search results.
+        description: Average position when supported for the requested result type.
         expr:
           kind: path
           path:
@@ -371,12 +374,15 @@ tables:
   - name: performance_by_date
     description: >
       Search performance metrics grouped by date. Each row represents one
-      day's clicks, impressions, CTR, and average position. Days with zero
-      data are omitted by the API.
+      day's clicks, impressions, CTR, and average position when supported.
+      Days with zero data are omitted by the API.
     fetch_limit_default: 1000
     guide: >
       Requires encoded_site_url, start_date, and end_date filters. The optional
       `type` filter defaults to Google's `web` Search result type when omitted.
+      Date grouping is a good starting point for non-web result types; for
+      discover and googleNews, avoid relying on position because Google does
+      not expose the same position surface for every result type.
       `SELECT date, clicks, impressions, ctr, position
       FROM google_search_console.performance_by_date
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
@@ -391,8 +397,9 @@ tables:
       - name: type
         required: false
         description: >
-          Search result type. Defaults to Google's web type when omitted.
-          Valid values include web, image, video, news, discover, and googleNews.
+          Search Analytics result type. Defaults to web when omitted. Valid
+          values include web, image, video, news, discover, and googleNews;
+          Google may reject unsupported type, dimension, and metric combinations.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -492,7 +499,7 @@ tables:
       - name: position
         type: Float64
         nullable: true
-        description: Average position in search results.
+        description: Average position when supported for the requested result type.
         expr:
           kind: path
           path:
@@ -502,15 +509,19 @@ tables:
     description: >
       Search performance metrics grouped by search query (keyword). Each
       row represents one query's clicks, impressions, CTR, and average
-      position. Results are sorted by click count descending.
+      position when supported. Results are sorted by click count descending.
     fetch_limit_default: 1000
     guide: >
       Requires encoded_site_url, start_date, and end_date filters. The optional
       `type` filter defaults to Google's `web` Search result type when omitted.
+      Use query grouping with Search result types such as web, image, video, or
+      news. Google does not support query grouping for Discover, and unsupported
+      type/dimension combinations return API errors.
       `SELECT query, clicks, impressions, ctr, position
       FROM google_search_console.performance_by_query
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
       AND start_date = '2025-01-01' AND end_date = '2025-01-31'
+      AND type = 'web'
       LIMIT 50`.
     filters:
       - name: encoded_site_url
@@ -522,8 +533,9 @@ tables:
       - name: type
         required: false
         description: >
-          Search result type. Defaults to Google's web type when omitted.
-          Valid values include web, image, video, news, discover, and googleNews.
+          Search Analytics result type. Defaults to web when omitted. Use query
+          grouping with Search result types such as web, image, video, or news;
+          Google does not support query grouping for Discover.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -623,7 +635,7 @@ tables:
       - name: position
         type: Float64
         nullable: true
-        description: Average position in search results.
+        description: Average position when supported for the requested result type.
         expr:
           kind: path
           path:
@@ -632,11 +644,15 @@ tables:
   - name: performance_by_page
     description: >
       Search performance metrics grouped by landing page URL. Each row
-      represents one page's clicks, impressions, CTR, and average position.
+      represents one page's clicks, impressions, CTR, and average position
+      when supported.
     fetch_limit_default: 1000
     guide: >
       Requires encoded_site_url, start_date, and end_date filters. The optional
       `type` filter defaults to Google's `web` Search result type when omitted.
+      Page grouping can be useful across result types, but position may not be
+      available for discover or googleNews; unsupported type/dimension
+      combinations return Google API errors.
       `SELECT page, clicks, impressions, ctr, position
       FROM google_search_console.performance_by_page
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
@@ -652,8 +668,9 @@ tables:
       - name: type
         required: false
         description: >
-          Search result type. Defaults to Google's web type when omitted.
-          Valid values include web, image, video, news, discover, and googleNews.
+          Search Analytics result type. Defaults to web when omitted. Valid
+          values include web, image, video, news, discover, and googleNews;
+          Google may reject unsupported type, dimension, and metric combinations.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -753,7 +770,7 @@ tables:
       - name: position
         type: Float64
         nullable: true
-        description: Average position in search results.
+        description: Average position when supported for the requested result type.
         expr:
           kind: path
           path:
@@ -762,12 +779,16 @@ tables:
   - name: performance_by_country
     description: >
       Search performance metrics grouped by country. Each row represents
-      one country's clicks, impressions, CTR, and average position.
+      one country's clicks, impressions, CTR, and average position when
+      supported.
       Countries use lowercase ISO 3166-1 alpha-3 codes (e.g. usa, gbr, deu).
     fetch_limit_default: 1000
     guide: >
       Requires encoded_site_url, start_date, and end_date filters. The optional
       `type` filter defaults to Google's `web` Search result type when omitted.
+      Country grouping can be useful across result types, but position may not
+      be available for discover or googleNews; unsupported type/dimension
+      combinations return Google API errors.
       `SELECT country, clicks, impressions, ctr, position
       FROM google_search_console.performance_by_country
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
@@ -783,8 +804,9 @@ tables:
       - name: type
         required: false
         description: >
-          Search result type. Defaults to Google's web type when omitted.
-          Valid values include web, image, video, news, discover, and googleNews.
+          Search Analytics result type. Defaults to web when omitted. Valid
+          values include web, image, video, news, discover, and googleNews;
+          Google may reject unsupported type, dimension, and metric combinations.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -884,7 +906,7 @@ tables:
       - name: position
         type: Float64
         nullable: true
-        description: Average position in search results.
+        description: Average position when supported for the requested result type.
         expr:
           kind: path
           path:
@@ -894,11 +916,14 @@ tables:
     description: >
       Search performance metrics grouped by device type. Each row
       represents one device type's clicks, impressions, CTR, and average
-      position. Device values are MOBILE, DESKTOP, or TABLET.
+      position when supported. Device values are MOBILE, DESKTOP, or TABLET.
     fetch_limit_default: 1000
     guide: >
       Requires encoded_site_url, start_date, and end_date filters. The optional
       `type` filter defaults to Google's `web` Search result type when omitted.
+      Device grouping can be useful across result types, but position may not
+      be available for discover or googleNews; unsupported type/dimension
+      combinations return Google API errors.
       `SELECT device, clicks, impressions, ctr, position
       FROM google_search_console.performance_by_device
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
@@ -913,8 +938,9 @@ tables:
       - name: type
         required: false
         description: >
-          Search result type. Defaults to Google's web type when omitted.
-          Valid values include web, image, video, news, discover, and googleNews.
+          Search Analytics result type. Defaults to web when omitted. Valid
+          values include web, image, video, news, discover, and googleNews;
+          Google may reject unsupported type, dimension, and metric combinations.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -1014,7 +1040,7 @@ tables:
       - name: position
         type: Float64
         nullable: true
-        description: Average position in search results.
+        description: Average position when supported for the requested result type.
         expr:
           kind: path
           path:
@@ -1024,12 +1050,14 @@ tables:
     description: >
       Search performance metrics grouped by Search appearance feature. Use this
       table to discover the Search appearance values available for a property
-      and compare clicks, impressions, CTR, and average position by result
-      feature.
+      and compare clicks, impressions, CTR, and average position when
+      supported by result feature.
     fetch_limit_default: 1000
     guide: >
       Requires encoded_site_url, start_date, and end_date filters. The optional
       `type` filter defaults to Google's `web` Search result type when omitted.
+      Search appearance is safest with web Search results. Google may reject
+      unsupported non-web type/searchAppearance combinations.
       `SELECT search_appearance, clicks, impressions, ctr, position
       FROM google_search_console.performance_by_search_appearance
       WHERE encoded_site_url = 'https%3A%2F%2Fexample.com%2F'
@@ -1045,8 +1073,9 @@ tables:
       - name: type
         required: false
         description: >
-          Search result type. Defaults to Google's web type when omitted.
-          Valid values include web, image, video, news, discover, and googleNews.
+          Search Analytics result type. Defaults to web when omitted. Search
+          appearance is safest with web Search results; Google may reject
+          unsupported non-web type/searchAppearance combinations.
     request:
       method: POST
       path: /sites/{{filter.encoded_site_url}}/searchAnalytics/query
@@ -1146,7 +1175,7 @@ tables:
       - name: position
         type: Float64
         nullable: true
-        description: Average position in search results.
+        description: Average position when supported for the requested result type.
         expr:
           kind: path
           path:
