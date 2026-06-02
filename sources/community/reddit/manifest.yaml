@@ -1,20 +1,37 @@
 name: reddit
-version: 0.1.0
+version: 0.2.0
 dsl_version: 3
 backend: http
 description: >-
-  Query public Reddit posts, comments, user activity, and keyword search via
-  Reddit JSON endpoints. This source is read-only and does not require
-  authentication.
-base_url: https://www.reddit.com
+  Query Reddit posts, comments, user activity, and keyword search via the
+  Reddit OAuth API. Requires a Reddit OAuth access token from a registered
+  Reddit app.
+base_url: https://oauth.reddit.com
+
+inputs:
+  REDDIT_ACCESS_TOKEN:
+    kind: secret
+    hint: |
+      Reddit OAuth access token from a registered Reddit app. Reddit requires
+      clients to use OAuth for Data API access; unauthenticated .json traffic
+      is not a stable Coral source contract.
+
+      For a script app, request a token with grant_type=client_credentials
+      using your app's client ID and client secret, then store the returned
+      access_token as REDDIT_ACCESS_TOKEN. Coral sends it as
+      Authorization: Bearer <token>.
+
+auth:
+  type: HeaderAuth
+  headers:
+    - name: Authorization
+      from: template
+      template: Bearer {{input.REDDIT_ACCESS_TOKEN}}
 
 request_headers:
   - name: Accept
     from: literal
     value: application/json
-  - name: User-Agent
-    from: literal
-    value: coral-reddit-source/0.1
 
 test_queries:
   - SELECT title, author, score FROM reddit.subreddit_hot WHERE subreddit = 'redditdev' LIMIT 1
@@ -26,7 +43,6 @@ tables:
     guide: |
       Use this table to list currently hot posts from a subreddit. The
       `subreddit` filter is required and should not include the `r/` prefix.
-      Results come from Reddit's public JSON listing endpoint.
     fetch_limit_default: 25
     filters:
       - name: subreddit
@@ -34,6 +50,10 @@ tables:
     request:
       method: GET
       path: /r/{{filter.subreddit}}/hot.json
+      query:
+        - name: raw_json
+          from: literal
+          value: "1"
     response:
       rows_path:
         - data
@@ -146,6 +166,10 @@ tables:
     request:
       method: GET
       path: /r/{{filter.subreddit}}/new.json
+      query:
+        - name: raw_json
+          from: literal
+          value: "1"
     response:
       rows_path:
         - data
@@ -265,6 +289,9 @@ tables:
         - name: t
           from: filter
           key: t
+        - name: raw_json
+          from: literal
+          value: "1"
     response:
       rows_path:
         - data
@@ -400,6 +427,9 @@ tables:
         - name: t
           from: filter
           key: t
+        - name: raw_json
+          from: literal
+          value: "1"
     requests:
       - when_filters:
           - subreddit
@@ -416,6 +446,9 @@ tables:
             from: filter
             key: t
           - name: restrict_sr
+            from: literal
+            value: "1"
+          - name: raw_json
             from: literal
             value: "1"
     response:
@@ -535,6 +568,10 @@ tables:
     request:
       method: GET
       path: /user/{{filter.username}}/submitted.json
+      query:
+        - name: raw_json
+          from: literal
+          value: "1"
     response:
       rows_path:
         - data
@@ -632,6 +669,10 @@ tables:
     request:
       method: GET
       path: /user/{{filter.username}}/comments.json
+      query:
+        - name: raw_json
+          from: literal
+          value: "1"
     response:
       rows_path:
         - data
@@ -727,6 +768,10 @@ tables:
     request:
       method: GET
       path: /r/{{filter.subreddit}}/comments/{{filter.post_id}}.json
+      query:
+        - name: raw_json
+          from: literal
+          value: "1"
     response:
       rows_path:
         - "1"

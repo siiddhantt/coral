@@ -1,18 +1,53 @@
 # Reddit
 
-**Version:** 0.1.0
+**Version:** 0.2.0
 **Backend:** HTTP
 **Tables:** 7
-**Base URL:** `https://www.reddit.com`
+**Base URL:** `https://oauth.reddit.com`
 
-Query public Reddit posts, comments, user activity, and keyword search through
-Reddit JSON endpoints. This source is read-only and does not require
-authentication.
+Query Reddit posts, comments, user activity, and keyword search via the Reddit
+OAuth API. Requires a Reddit OAuth access token from a registered Reddit app.
 
 ```bash
 coral source add --file sources/community/reddit/manifest.yaml
 coral source test reddit
 ```
+
+## Authentication
+
+This source uses Reddit's OAuth API. Reddit requires clients to use a
+registered app and OAuth token for Data API access; unauthenticated `.json`
+traffic can be blocked and is not the supported Coral access model.
+
+You need a Reddit account and a registered script application.
+
+1. Go to https://www.reddit.com/prefs/apps and click **create another app**.
+2. Choose **script** as the app type.
+3. Use a unique, descriptive app name and contact URL/email so Reddit can
+   identify your client.
+4. Note the **client ID** shown under the app name and the **client secret**.
+5. Request an OAuth access token from Reddit, then register it as a Coral
+   secret and add the source:
+
+```bash
+REDDIT_ACCESS_TOKEN=$(
+  curl -s -X POST https://www.reddit.com/api/v1/access_token \
+    -u '<your_client_id>:<your_client_secret>' \
+    -A 'Coral source by <your reddit username or contact>' \
+    -d 'grant_type=client_credentials' \
+  | jq -r .access_token
+)
+
+coral secret set REDDIT_ACCESS_TOKEN "$REDDIT_ACCESS_TOKEN"
+coral source add --file sources/community/reddit/manifest.yaml
+```
+
+Coral sends the stored token as `Authorization: Bearer <token>`. Reddit access
+tokens are time-limited, so refresh and re-store the token if queries return
+`401`.
+
+For full details on Reddit's API access rules see:
+https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki
 
 ## Tables
 
@@ -21,12 +56,23 @@ coral source test reddit
 | `subreddit_hot` | Hot posts from a subreddit | `subreddit` |
 | `subreddit_new` | Newest posts from a subreddit | `subreddit` |
 | `subreddit_top` | Top posts from a subreddit | `subreddit` |
-| `search_posts` | Search public Reddit posts globally or in one subreddit | `q` |
+| `search_posts` | Search Reddit posts globally or in one subreddit | `q` |
 | `user_posts` | Public posts submitted by a user | `username` |
 | `user_comments` | Public comments written by a user | `username` |
 | `post_comments` | Top-level comments for a post | `subreddit`, `post_id` |
 
 ## Quick Start
+
+Verify your credentials work first — keep the limit small:
+
+```bash
+coral sql "
+  SELECT title, score
+  FROM reddit.subreddit_hot
+  WHERE subreddit = 'redditdev'
+  LIMIT 3
+"
+```
 
 List hot posts from a subreddit:
 
@@ -107,6 +153,36 @@ coral sql "
 "
 ```
 
+## Pagination
+
+Reddit listing endpoints use cursor-based (`after` / `before`) pagination.
+Coral handles this automatically using the `after` token from each response.
+Page size is controlled by the `limit` parameter (default 25, max 100 per
+request). Coral fetches up to 10 pages per query.
+
+The `after` cursor is the `fullname` of the last item in the previous page,
+prefixed with `t3_` for posts and `t1_` for comments. If you need to resume
+from a specific position, you can pass the `fullname` of the last row you
+received as an `after` value in a follow-up query.
+
+`post_comments` does not paginate — Reddit returns all top-level comments for
+a post in a single response.
+
+## Rate Limits
+
+Reddit's OAuth API allows 100 requests per minute per OAuth token. Each
+response includes these headers:
+
+| Header | Meaning |
+| --- | --- |
+| `X-Ratelimit-Used` | Requests consumed in the current window |
+| `X-Ratelimit-Remaining` | Requests available before throttling |
+| `X-Ratelimit-Reset` | Seconds until the current window resets |
+
+Keep exploratory queries small with `LIMIT`. If Coral surfaces a 429 or
+rate-limit error, wait for the reset window (at most 60 seconds) before
+retrying.
+
 ## Common Columns
 
 Post tables expose these commonly useful columns:
@@ -143,14 +219,16 @@ Comment tables expose:
 
 ## Notes And Limitations
 
-- This source uses public Reddit JSON endpoints and does not authenticate.
-- Private subreddits, saved posts, inbox data, moderation queues, and votes are
-  not available in this version.
-- Reddit may rate-limit public requests. Keep exploratory queries small with
-  `LIMIT`.
+- This source uses the Reddit OAuth API with a bearer access token from a
+  registered Reddit app. See **Authentication** above.
+- Private subreddits, saved posts, inbox data, moderation queues, and votes
+  are not available.
 - `post_comments` returns top-level comments and includes Reddit `more`
-  placeholders as rows with `kind = 'more'`; nested replies are available in the
-  `replies` JSON column.
+  placeholders as rows with `kind = 'more'`; nested replies are available in
+  the `replies` JSON column.
+- All requests include `raw_json=1` so `title`, `selftext`, and `body` are
+  returned as unescaped Unicode. Without this parameter Reddit would
+  HTML-escape `<`, `>`, and `&`.
 - Subreddit filters should not include the `r/` prefix. Use `LocalLLaMA`, not
   `r/LocalLLaMA`.
 - Username filters should not include the `u/` prefix.
@@ -214,4 +292,3 @@ Reddit mentions
 + PostHog product events
 = community and customer intelligence brief
 ```
-
