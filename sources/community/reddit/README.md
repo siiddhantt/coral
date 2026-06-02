@@ -28,7 +28,7 @@ You need a Reddit account and a registered script application.
    identify your client.
 4. Note the **client ID** shown under the app name and the **client secret**.
 5. Request an OAuth access token from Reddit, then register it as a Coral
-   secret and add the source:
+   secret through `source add`:
 
 ```bash
 REDDIT_ACCESS_TOKEN=$(
@@ -39,8 +39,8 @@ REDDIT_ACCESS_TOKEN=$(
   | jq -r .access_token
 )
 
-coral secret set REDDIT_ACCESS_TOKEN "$REDDIT_ACCESS_TOKEN"
-coral source add --file sources/community/reddit/manifest.yaml
+REDDIT_ACCESS_TOKEN="$REDDIT_ACCESS_TOKEN" \
+  coral source add --file sources/community/reddit/manifest.yaml
 ```
 
 Coral sends the stored token as `Authorization: Bearer <token>`. Reddit access
