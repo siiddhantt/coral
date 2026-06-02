@@ -97,6 +97,16 @@ impl ValidatedSourceManifest {
         }
     }
 
+    /// Returns the set of declared source secrets that may be passed to runtime.
+    #[must_use]
+    pub fn declared_secret_names(&self) -> BTreeSet<String> {
+        match &self.inner {
+            ValidatedManifestKind::Http(manifest) => manifest.declared_secret_names(),
+            ValidatedManifestKind::File(manifest) => manifest.declared_secret_names(),
+            ValidatedManifestKind::Mcp(manifest) => manifest.declared_secret_names(),
+        }
+    }
+
     /// Returns the declared top-level inputs for this manifest in authored order.
     #[must_use]
     pub fn declared_inputs(&self) -> &[ManifestInputSpec] {
@@ -245,7 +255,7 @@ tables:
 
         assert_eq!(
             error.to_string(),
-            "source 'demo' has duplicate table 'messages'"
+            "source 'demo' table 'messages' is declared more than once"
         );
     }
 
