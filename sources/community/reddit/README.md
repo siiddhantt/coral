@@ -2,7 +2,8 @@
 
 **Version:** 0.2.0
 **Backend:** HTTP
-**Tables:** 7
+**Tables:** 6
+**Functions:** 1
 **Base URL:** `https://oauth.reddit.com`
 
 Query Reddit posts, comments, user activity, and keyword search via the Reddit
@@ -49,17 +50,17 @@ tokens are time-limited, so refresh and re-store the token if queries return
 For full details on Reddit's API access rules see:
 https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki
 
-## Tables
+## Tables And Functions
 
-| Table | Description | Required filters |
-| --- | --- | --- |
-| `subreddit_hot` | Hot posts from a subreddit | `subreddit` |
-| `subreddit_new` | Newest posts from a subreddit | `subreddit` |
-| `subreddit_top` | Top posts from a subreddit | `subreddit` |
-| `search_posts` | Search Reddit posts globally or in one subreddit | `q` |
-| `user_posts` | Public posts submitted by a user | `username` |
-| `user_comments` | Public comments written by a user | `username` |
-| `post_comments` | Top-level comments for a post | `subreddit`, `post_id` |
+| Surface | Kind | Description | Required inputs |
+| --- | --- | --- | --- |
+| `subreddit_hot` | table | Hot posts from a subreddit | `subreddit` filter |
+| `subreddit_new` | table | Newest posts from a subreddit | `subreddit` filter |
+| `subreddit_top` | table | Top posts from a subreddit | `subreddit` filter |
+| `search_posts(q => ...)` | search function | Provider-ranked Reddit post search | `q` argument |
+| `user_posts` | table | Public posts submitted by a user | `username` filter |
+| `user_comments` | table | Public comments written by a user | `username` filter |
+| `post_comments` | table | Top-level comment listing for a post | `subreddit`, `post_id` filters |
 
 ## Quick Start
 
@@ -101,20 +102,17 @@ Search all of Reddit:
 ```bash
 coral sql "
   SELECT title, subreddit, author, score, permalink
-  FROM reddit.search_posts
-  WHERE q = 'open source agents'
+  FROM reddit.search_posts(q => 'open source agents')
   LIMIT 25
 "
 ```
 
-Search inside one subreddit:
+Search newest matching posts:
 
 ```bash
 coral sql "
   SELECT title, subreddit, author, score, permalink
-  FROM reddit.search_posts
-  WHERE q = 'vector database'
-    AND subreddit = 'LocalLLaMA'
+  FROM reddit.search_posts(q => 'vector database', sort => 'new')
   LIMIT 25
 "
 ```
@@ -161,26 +159,29 @@ Page size is controlled by the `limit` parameter (default 25, max 100 per
 request). Coral fetches up to 10 pages per query.
 
 The `after` cursor is the `fullname` of the last item in the previous page,
-prefixed with `t3_` for posts and `t1_` for comments. If you need to resume
-from a specific position, you can pass the `fullname` of the last row you
-received as an `after` value in a follow-up query.
+prefixed with `t3_` for posts and `t1_` for comments. The manifest uses this
+cursor internally for automatic pagination; it does not currently expose a
+manual `after` or `before` filter.
 
-`post_comments` does not paginate — Reddit returns all top-level comments for
-a post in a single response.
+`post_comments` uses Reddit's comments listing endpoint without optional
+`limit`, `depth`, `sort`, or `showmore` controls. Treat it as the default
+top-level comment listing Reddit returns for that request, not a guarantee of
+every possible comment in a discussion.
 
 ## Rate Limits
 
-Reddit's OAuth API allows 100 requests per minute per OAuth token. Each
-response includes these headers:
+For eligible free Data API usage, Reddit currently documents a limit of 100
+queries per minute per OAuth client ID, averaged over a 10-minute window to
+allow bursts. Each OAuth response includes approximate rate-limit headers:
 
 | Header | Meaning |
 | --- | --- |
 | `X-Ratelimit-Used` | Requests consumed in the current window |
 | `X-Ratelimit-Remaining` | Requests available before throttling |
-| `X-Ratelimit-Reset` | Seconds until the current window resets |
+| `X-Ratelimit-Reset` | Seconds until the current rate-limit period ends |
 
 Keep exploratory queries small with `LIMIT`. If Coral surfaces a 429 or
-rate-limit error, wait for the reset window (at most 60 seconds) before
+rate-limit error, wait according to the reset value returned by Reddit before
 retrying.
 
 ## Common Columns
@@ -223,9 +224,10 @@ Comment tables expose:
   registered Reddit app. See **Authentication** above.
 - Private subreddits, saved posts, inbox data, moderation queues, and votes
   are not available.
-- `post_comments` returns top-level comments and includes Reddit `more`
-  placeholders as rows with `kind = 'more'`; nested replies are available in
-  the `replies` JSON column.
+- `post_comments` returns Reddit's default top-level comment listing for the
+  post and may include `more` placeholders as rows with `kind = 'more'`;
+  nested replies are available in the `replies` JSON column when Reddit
+  includes them.
 - All requests include `raw_json=1` so `title`, `selftext`, and `body` are
   returned as unescaped Unicode. Without this parameter Reddit would
   HTML-escape `<`, `>`, and `&`.
@@ -240,8 +242,7 @@ Find product mentions:
 ```bash
 coral sql "
   SELECT title, subreddit, author, score, permalink
-  FROM reddit.search_posts
-  WHERE q = 'RasmalAI bug OR error OR pricing'
+  FROM reddit.search_posts(q => 'RasmalAI bug OR error OR pricing')
   LIMIT 50
 "
 ```
@@ -251,9 +252,7 @@ Watch launch sentiment:
 ```bash
 coral sql "
   SELECT title, subreddit, score, num_comments, created_utc, permalink
-  FROM reddit.search_posts
-  WHERE q = 'Coral SQL'
-    AND sort = 'new'
+  FROM reddit.search_posts(q => 'Coral SQL', sort => 'new')
   LIMIT 50
 "
 ```
