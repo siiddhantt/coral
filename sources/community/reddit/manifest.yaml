@@ -12,14 +12,18 @@ inputs:
   REDDIT_ACCESS_TOKEN:
     kind: secret
     hint: |
-      Reddit OAuth access token from a registered Reddit app. Reddit requires
-      clients to use OAuth for Data API access; unauthenticated .json traffic
-      is not a stable Coral source contract.
+      Reddit OAuth access token from a registered Reddit app. Coral stores the
+      token as a source secret and sends it as Authorization: Bearer <token>.
 
       For a script app, request a token with grant_type=client_credentials
-      using your app's client ID and client secret, then store the returned
-      access_token as REDDIT_ACCESS_TOKEN. Coral sends it as
-      Authorization: Bearer <token>.
+      using your app's client ID and client secret, then paste or export the
+      returned access_token as REDDIT_ACCESS_TOKEN. Reddit access tokens expire;
+      mint and store a new token if Reddit returns 401.
+    credential:
+      methods:
+        - type: source_config
+          label: Paste Reddit access token
+          description: Paste an OAuth access token minted from a registered Reddit app.
 
 auth:
   type: HeaderAuth
@@ -917,12 +921,15 @@ tables:
       - name: sort
         required: false
       - name: depth
+        type: Int64
         required: false
       - name: showmore
+        type: Boolean
         required: false
       - name: comment
         required: false
       - name: context
+        type: Int64
         required: false
     request:
       method: GET

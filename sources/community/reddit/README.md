@@ -36,7 +36,8 @@ REDDIT_ACCESS_TOKEN=$(
     -u '<your_client_id>:<your_client_secret>' \
     -A 'Coral source by <your reddit username or contact>' \
     -d 'grant_type=client_credentials' \
-  | jq -r .access_token
+  | jq -r .access_token \
+  | tr -d '\r\n'
 )
 
 REDDIT_ACCESS_TOKEN="$REDDIT_ACCESS_TOKEN" \
@@ -49,6 +50,8 @@ tokens are time-limited, so refresh and re-store the token if queries return
 
 For full details on Reddit's API access rules see:
 https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki
+and Reddit's Responsible Builder Policy:
+https://support.reddithelp.com/hc/en-us/articles/42728983564564-Responsible-Builder-Policy
 
 ## Tables And Functions
 
@@ -216,6 +219,51 @@ rate-limit error, Coral uses `X-Ratelimit-Reset` as a retry delay. Full
 remaining-quota tracking is not wired because Reddit's reset header is seconds
 until reset, while Coral's `reset_header` expects an absolute Unix epoch reset
 time.
+
+## Validation
+
+Lint the manifest:
+
+```bash
+coral source lint sources/community/reddit/manifest.yaml
+```
+
+Install and test with a registered Reddit app token:
+
+```bash
+REDDIT_ACCESS_TOKEN="<token>" \
+  coral source add --file sources/community/reddit/manifest.yaml
+coral source test reddit
+```
+
+Sanitized output from a live Reddit API test:
+
+```text
+reddit connected successfully
+
+reddit (6 tables)
+- post_comments
+- subreddit_hot
+- subreddit_new
+- subreddit_top
+- user_comments
+- user_posts
+
+Query tests
+3 declared, 3 passed, 0 failed
+
+PASS SELECT title, author, score FROM reddit.subreddit_hot WHERE subreddit = 'redditdev' LIMIT 1
+PASS SELECT title, subreddit, author FROM reddit.search_posts(q => 'rust') LIMIT 1
+PASS SELECT title, subreddit, author FROM reddit.search_subreddit_posts(subreddit => 'redditdev', q => 'oauth') LIMIT 1
+```
+
+Inspect the registered source catalog:
+
+```bash
+coral sql "SELECT table_name, description, required_filters FROM coral.tables WHERE schema_name = 'reddit' ORDER BY table_name"
+coral sql "SELECT function_name, kind, arguments_json, search_limits_json FROM coral.table_functions WHERE schema_name = 'reddit' ORDER BY function_name"
+coral sql "SELECT table_name, filter_name, is_required, data_type FROM coral.filters WHERE schema_name = 'reddit' ORDER BY table_name, filter_name"
+```
 
 ## Common Columns
 
