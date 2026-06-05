@@ -178,7 +178,7 @@ functions:
         nullable: true
         description: Echoes the search query.
         expr: {kind: from_arg, key: q}
-      - name: sort
+      - name: search_sort
         type: Utf8
         nullable: true
         description: Echoes the requested Reddit search sort.
@@ -333,7 +333,7 @@ functions:
         nullable: true
         description: Echoes the search query.
         expr: {kind: from_arg, key: q}
-      - name: sort
+      - name: search_sort
         type: Utf8
         nullable: true
         description: Echoes the requested Reddit search sort.
@@ -918,7 +918,7 @@ tables:
         required: true
       - name: post_id
         required: true
-      - name: sort
+      - name: comment_sort
         required: false
       - name: depth
         type: Int64
@@ -937,7 +937,7 @@ tables:
       query:
         - name: sort
           from: filter
-          key: sort
+          key: comment_sort
         - name: depth
           from: filter_int
           key: depth
@@ -1024,11 +1024,11 @@ tables:
         nullable: true
         description: Echoes the requested post ID.
         expr: {kind: from_filter, key: post_id}
-      - name: sort
+      - name: comment_sort
         type: Utf8
         nullable: true
         description: Echoes the requested comment sort.
-        expr: {kind: from_filter, key: sort}
+        expr: {kind: from_filter, key: comment_sort}
       - name: depth
         type: Int64
         nullable: true

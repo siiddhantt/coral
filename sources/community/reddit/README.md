@@ -155,7 +155,7 @@ coral sql "
   FROM reddit.post_comments
   WHERE subreddit = 'redditdev'
     AND post_id = '<post_id>'
-    AND sort = 'top'
+    AND comment_sort = 'top'
     AND depth = 2
     AND showmore = true
   LIMIT 100
@@ -196,11 +196,12 @@ prefixed with `t3_` for posts and `t1_` for comments. The manifest uses this
 cursor internally for automatic pagination; it does not currently expose a
 manual `after` or `before` filter.
 
-`post_comments` exposes Reddit's documented `sort`, `depth`, `showmore`,
-`comment`, and `context` controls. Treat it as the comment listing Reddit
-returns for that request, not a guarantee of every possible comment in a
-discussion. Coral exposes nested replies as JSON when Reddit includes them, but
-does not recursively expand every `more` placeholder automatically.
+`post_comments` exposes Reddit's documented sort control as `comment_sort`,
+plus `depth`, `showmore`, `comment`, and `context` controls. Treat it as the
+comment listing Reddit returns for that request, not a guarantee of every
+possible comment in a discussion. Coral exposes nested replies as JSON when
+Reddit includes them, but does not recursively expand every `more` placeholder
+automatically.
 
 ## Rate Limits
 
@@ -306,9 +307,9 @@ Comment tables expose:
 - Private subreddits, saved posts, inbox data, moderation queues, and votes
   are not available.
 - `post_comments` returns the comment listing Reddit provides for the requested
-  `sort`, `depth`, `showmore`, `comment`, and `context` controls. It may include
-  `more` placeholders as rows with `kind = 'more'`; nested replies are
-  available in the `replies` JSON column when Reddit includes them.
+  `comment_sort`, `depth`, `showmore`, `comment`, and `context` controls. It
+  may include `more` placeholders as rows with `kind = 'more'`; nested replies
+  are available in the `replies` JSON column when Reddit includes them.
 - All requests include `raw_json=1` so `title`, `selftext`, and `body` are
   returned as unescaped Unicode. Without this parameter Reddit would
   HTML-escape `<`, `>`, and `&`.
