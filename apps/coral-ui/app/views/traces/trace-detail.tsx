@@ -661,7 +661,6 @@ function TraceDetailContent({
   olderTraceId,
   onClose,
   onSelectTrace,
-  traceId,
 }: {
   detail: TraceDetailData | null
   extraTabs?: (detail: TraceDetailData) => ExtraDetailTab[]
@@ -671,15 +670,10 @@ function TraceDetailContent({
   olderTraceId?: string | null
   onClose: () => void
   onSelectTrace?: (traceId: string) => void
-  traceId: string
 }) {
   const [activeTab, setActiveTab] = useState<string>('timeline')
   const [expandedHttpSpanId, setExpandedHttpSpanId] = useState<string | null>(null)
   const [navigableSpanIds, setNavigableSpanIds] = useState<string[]>([])
-  useEffect(() => {
-    setActiveTab('timeline')
-    setExpandedHttpSpanId(null)
-  }, [traceId])
 
   const selectAdjacentSpan = useCallback(
     (direction: -1 | 1) => {
@@ -770,24 +764,16 @@ function TraceDetailContent({
     [detail, extraTabs],
   )
 
-  if (loadError)
-    return (
-      <div className={s.detailEmpty}>
-        <KeyboardShortcut handler={handleEscapeShortcut} shortcut="Escape" />
-        <EmptyPage description={loadError} iconName="CircleAlert" title="Tracing unavailable" />
-        <Button.TextButton onClick={onClose} variant="secondary">
-          Back to query stream
-        </Button.TextButton>
-      </div>
-    )
   if (!summary) {
     return (
       <div className={s.detailEmpty}>
         <KeyboardShortcut handler={handleEscapeShortcut} shortcut="Escape" />
         <EmptyPage
-          title="No spans for this trace"
-          description="This trace did not include an operation summary or spans to display."
-          iconName="Activity"
+          description={
+            loadError ?? 'This trace did not include an operation summary or spans to display.'
+          }
+          iconName={loadError ? 'CircleAlert' : 'Activity'}
+          title={loadError ? 'Tracing unavailable' : 'No spans for this trace'}
         />
         <Button.TextButton onClick={onClose} variant="secondary">
           Back to query stream
@@ -891,6 +877,8 @@ function TraceDetailContent({
               spans={detail.spans}
               summary={summary}
             />
+          ) : loadError ? (
+            <EmptyPage description={loadError} iconName="CircleAlert" title="Spans unavailable" />
           ) : null)}
         {activeExtraTab?.content}
       </div>
@@ -923,6 +911,7 @@ export function TraceDetail({
   return (
     <div className={s.detailOverlay}>
       <TraceDetailContent
+        key={traceId}
         detail={detail}
         extraTabs={extraTabs}
         initialSummary={initialSummary}
@@ -938,7 +927,6 @@ export function TraceDetail({
         onSelectTrace={(nextTraceId) =>
           navigate(traceLocation(workspaceId, nextTraceId, location.search))
         }
-        traceId={traceId}
       />
     </div>
   )
