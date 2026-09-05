@@ -192,6 +192,7 @@ enum OAuthMetadataKey {
     RefreshToken,
     TokenType,
     Scope,
+    RequestedScope,
     ClientId,
     TokenUrl,
     Resource,
@@ -209,6 +210,7 @@ impl OAuthMetadataKey {
             Self::RefreshToken => "refresh_token",
             Self::TokenType => "token_type",
             Self::Scope => "scope",
+            Self::RequestedScope => "requested_scope",
             Self::ClientId => "client_id",
             Self::TokenUrl => "token_url",
             Self::Resource => "resource",
@@ -556,7 +558,14 @@ impl OAuthCredentialService {
             client,
             resource,
         };
-        Ok(oauth_credential_material(&common, &token))
+        let mut material = oauth_credential_material(&common, &token);
+        // Preserve an empty value so renewal does not borrow scopes from another method.
+        OAuthMetadataKey::RequestedScope.insert(
+            &oauth_metadata_prefix(&material.input_key),
+            &mut material.internal_metadata,
+            scope.unwrap_or_default(),
+        );
+        Ok(material)
     }
 
     async fn authorize_device_code<F, Fut>(
@@ -1803,10 +1812,10 @@ fn oauth_credential_material(
         &mut internal_metadata,
         session.endpoints.token_url.clone(),
     );
-    OAuthMetadataKey::Resource.insert_optional(
+    OAuthMetadataKey::Resource.insert(
         &prefix,
         &mut internal_metadata,
-        session.resource.as_deref(),
+        session.resource.as_deref().unwrap_or_default(),
     );
     OAuthMetadataKey::ClientSecretTransport.insert_optional(
         &prefix,
@@ -1927,15 +1936,23 @@ fn oauth_refresh_config(
             "OAuth access token for source secret '{access_token_material_key}' expired and cannot be refreshed because client secret metadata is missing"
         )));
     }
+    let stored_scope = OAuthMetadataKey::RequestedScope
+        .get(metadata_prefix, material)
+        .or_else(|| OAuthMetadataKey::Scope.get(metadata_prefix, material));
+    if matches!(grant, OAuthRefreshGrant::ClientCredentials) && stored_scope.is_none() {
+        return Err(AppError::FailedPrecondition(format!(
+            "OAuth access token for source secret '{access_token_material_key}' cannot be re-minted because stored scope metadata is missing; reconnect the source so Coral can preserve the selected OAuth method's scopes"
+        )));
+    }
+    let scope = stored_scope
+        .filter(|scope| !scope.is_empty())
+        .map(ToString::to_string);
     Ok(Some(OAuthRefreshConfig {
         token_url,
         client_id,
         client_secret,
         client_secret_transport,
-        scope: oauth
-            .scopes
-            .as_ref()
-            .map(|scopes| join_scope_values(scopes.scope.delimiter, &scopes.scope.values)),
+        scope,
         resource,
         grant,
     }))
@@ -1981,11 +1998,8 @@ fn oauth_refresh_resource(
     oauth: &ManifestOAuthCredentialSpec,
     material: &BTreeMap<String, String>,
 ) -> Result<Option<String>, AppError> {
-    if let Some(resource) = OAuthMetadataKey::Resource
-        .get(metadata_prefix, material)
-        .filter(|value| !value.is_empty())
-    {
-        return Ok(Some(resource.to_string()));
+    if let Some(resource) = OAuthMetadataKey::Resource.get(metadata_prefix, material) {
+        return Ok((!resource.is_empty()).then(|| resource.to_string()));
     }
 
     oauth_refresh_manifest_resource(access_token_material_key, oauth)
@@ -2109,19 +2123,24 @@ mod tests {
         receive_callback, request_device_code,
     };
     use coral_spec::{
-        ManifestOAuthClientIdSpec, ManifestOAuthClientSecretSpec,
-        ManifestOAuthClientSecretTransport, ManifestOAuthClientSpec, ManifestOAuthCredentialSpec,
-        ManifestOAuthDynamicClientRegistrationAuthMethod,
+        ManifestCredentialMethod, ManifestCredentialMethodKind, ManifestCredentialSpec,
+        ManifestInputKind, ManifestInputSpec, ManifestOAuthClientIdSpec,
+        ManifestOAuthClientSecretSpec, ManifestOAuthClientSecretTransport, ManifestOAuthClientSpec,
+        ManifestOAuthCredentialSpec, ManifestOAuthDynamicClientRegistrationAuthMethod,
         ManifestOAuthDynamicClientRegistrationSpec, ManifestOAuthFlowKind, ManifestOAuthFlowSpec,
         ManifestOAuthPkceMode, ManifestOAuthRedirectUriPortMode, ManifestOAuthScopeDelimiter,
         ManifestOAuthScopeSpec, ManifestOAuthScopesSpec,
     };
     use serde_json::Value;
+    use tempfile::TempDir;
     use tokio::net::{TcpListener as TokioTcpListener, TcpStream as TokioTcpStream};
     use tokio::sync::oneshot;
     use tokio::task::JoinHandle;
     use tokio::{io::AsyncReadExt as _, io::AsyncWriteExt as _};
     use url::Url;
+
+    use crate::credentials::{CredentialManager, CredentialStore};
+    use crate::state::AppStateLayout;
 
     static EMPTY_SOURCE_INPUTS: LazyLock<BTreeMap<String, String>> = LazyLock::new(BTreeMap::new);
 
@@ -2513,11 +2532,122 @@ mod tests {
                 .map(String::as_str),
             Some("https://api.example.com/")
         );
+        assert_eq!(
+            completed
+                .internal_metadata
+                .get(&format!("{prefix}requested_scope"))
+                .map(String::as_str),
+            Some("repo read:org")
+        );
         assert!(
             !completed
                 .internal_metadata
                 .contains_key(&format!("{prefix}refresh_token"))
         );
+    }
+
+    #[tokio::test]
+    async fn client_credentials_renewal_preserves_selected_second_method_context() {
+        for (selected_scopes, expected_scope) in
+            [(Some(vec!["read".to_string()]), Some("read")), (None, None)]
+        {
+            let token_listener = StdTcpListener::bind("127.0.0.1:0").expect("token listener");
+            let token_url = format!(
+                "http://{}/token",
+                token_listener.local_addr().expect("addr")
+            );
+            let token_listener = async_listener(token_listener);
+            let token_server = tokio::spawn(async move {
+                let mut requests = Vec::new();
+                for response_body in [
+                    r#"{"access_token":"initial-token","expires_in":0}"#,
+                    r#"{"access_token":"first-renewal","scope":"read","expires_in":0}"#,
+                    r#"{"access_token":"renewed-token","expires_in":3600}"#,
+                ] {
+                    let (mut stream, _) =
+                        token_listener.accept().await.expect("accept token request");
+                    requests.push(read_http_request(&mut stream).await);
+                    write_json_response(&mut stream, response_body).await;
+                }
+                requests
+            });
+            let first_method = client_credentials_oauth_spec(
+                &token_url,
+                ManifestOAuthClientSecretTransport::BasicAuth,
+            );
+            let mut second_method = client_credentials_oauth_spec(
+                &token_url,
+                ManifestOAuthClientSecretTransport::BasicAuth,
+            );
+            second_method.resource = None;
+            second_method.scopes = selected_scopes.map(|values| ManifestOAuthScopesSpec {
+                scope: ManifestOAuthScopeSpec {
+                    delimiter: ManifestOAuthScopeDelimiter::Space,
+                    values,
+                },
+            });
+            let input = ManifestInputSpec {
+                key: "API_TOKEN".to_string(),
+                kind: ManifestInputKind::Secret,
+                required: true,
+                default_value: String::new(),
+                hint: None,
+                credential: Some(ManifestCredentialSpec {
+                    methods: vec![
+                        oauth_credential_method(first_method),
+                        oauth_credential_method(second_method),
+                    ],
+                }),
+            };
+            let selected_oauth = input.credential.as_ref().expect("credential").methods[1]
+                .oauth
+                .as_ref()
+                .expect("OAuth method");
+            let service = OAuthCredentialService::new();
+
+            let completed = service
+                .authorize(
+                    StartOAuthCredentialRequest {
+                        input_key: "API_TOKEN",
+                        oauth: selected_oauth,
+                        source_inputs: &EMPTY_SOURCE_INPUTS,
+                        credential_inputs: vec![
+                            ("OAUTH_CLIENT_ID".to_string(), "app-client".to_string()),
+                            ("OAUTH_CLIENT_SECRET".to_string(), "app-secret".to_string()),
+                        ],
+                    },
+                    |_authorization| async { Ok(()) },
+                )
+                .await
+                .expect("authorize selected client credentials method");
+            let mut material = completed.internal_metadata;
+            material.insert(completed.input_key, completed.access_token);
+
+            let temp = TempDir::new().expect("temp dir");
+            let layout = AppStateLayout::discover(Some(temp.path().join("coral-config")))
+                .expect("discover app state");
+            let credential_manager = CredentialManager::new(CredentialStore::new(layout));
+            for _ in 0..2 {
+                credential_manager
+                    .refresh_material_for_inputs(std::slice::from_ref(&input), &mut material)
+                    .await
+                    .expect("renew selected client credentials method");
+            }
+            let requests = token_server.await.expect("token server");
+
+            assert_eq!(requests.len(), 3);
+            for request in &requests {
+                assert!(!request.form.contains_key("resource"));
+                assert_eq!(
+                    request.form.get("scope").map(String::as_str),
+                    expected_scope
+                );
+            }
+            assert_eq!(
+                material.get("API_TOKEN").map(String::as_str),
+                Some("renewed-token")
+            );
+        }
     }
 
     #[test]
@@ -2559,6 +2689,7 @@ mod tests {
             ("API_TOKEN".to_string(), "expired-token".to_string()),
             (format!("{prefix}method"), "oauth".to_string()),
             (format!("{prefix}flow"), "client_credentials".to_string()),
+            (format!("{prefix}scope"), "read".to_string()),
             (
                 format!("{prefix}access_token_expires_at"),
                 (chrono::Utc::now() - chrono::Duration::minutes(5)).to_rfc3339(),
@@ -2580,6 +2711,25 @@ mod tests {
         ]);
         let service = OAuthCredentialService::new();
 
+        let mut without_scope = material.clone();
+        without_scope.remove(&format!("{prefix}scope"));
+        let error = service
+            .refresh_if_needed(
+                RefreshOAuthCredentialRequest::for_source_input("API_TOKEN", &oauth),
+                &mut without_scope,
+            )
+            .await
+            .expect_err("legacy client credentials without scope context must reconnect");
+        assert!(
+            error
+                .to_string()
+                .contains("stored scope metadata is missing; reconnect")
+        );
+        assert_eq!(
+            without_scope.get("API_TOKEN").map(String::as_str),
+            Some("expired-token")
+        );
+
         let refreshed = service
             .refresh_if_needed(
                 RefreshOAuthCredentialRequest::for_source_input("API_TOKEN", &oauth),
@@ -2594,10 +2744,7 @@ mod tests {
             captured.form.get("grant_type").map(String::as_str),
             Some("client_credentials")
         );
-        assert_eq!(
-            captured.form.get("scope").map(String::as_str),
-            Some("repo read:org")
-        );
+        assert_eq!(captured.form.get("scope").map(String::as_str), Some("read"));
         assert_eq!(
             captured.form.get("resource").map(String::as_str),
             Some("https://stored.example.com/")
@@ -4079,6 +4226,16 @@ mod tests {
                     values: vec!["repo".to_string(), "read:org".to_string()],
                 },
             }),
+        }
+    }
+
+    fn oauth_credential_method(oauth: ManifestOAuthCredentialSpec) -> ManifestCredentialMethod {
+        ManifestCredentialMethod {
+            kind: ManifestCredentialMethodKind::OAuth,
+            label: None,
+            description: None,
+            hint: None,
+            oauth: Some(oauth),
         }
     }
 
